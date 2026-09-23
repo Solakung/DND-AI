@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solo MMO - DnD Edition</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- ฝั่งซ้าย: DnD Sheet -->
+        <aside class="dnd-panel">
+            <h2>นักผจญภัย</h2>
+            <div class="stats">
+                <div class="stat"><span>STR (พลัง)</span><span>16</span></div>
+                <div class="stat"><span>DEX (ว่องไว)</span><span>14</span></div>
+                <div class="stat"><span>INT (ฉลาด)</span><span>10</span></div>
+                <div class="stat"><span>CON (อดทน)</span><span>15</span></div>
+            </div>
+            
+            <h3 style="margin-top: 20px;">กระเป๋า (Inventory)</h3>
+            <div class="inventory">
+                <div class="item">⚔️ ดาบเหล็กกล้า (1d8)</div>
+                <div class="item">🧪 โพชั่นฟื้นฟู (x3)</div>
+                <div class="item">🍞 เสบียงแห้ง (x5)</div>
+            </div>
+
+            <button onclick="rollD20()" class="dice-btn">🎲 ทอยเต๋า D20</button>
+        </aside>
+
+        <!-- ฝั่งขวา: ช่องแชท MMO -->
+        <main class="game-panel">
+            <div id="chat-log" class="chat-log">
+                <div class="message system">[System]: กำลังเชื่อมต่อเข้าสู่โลก...</div>
+            </div>
+            <div class="input-area">
+                <input type="text" id="action-input" placeholder="พิมพ์การกระทำของคุณ เช่น 'เดินเข้าไปในป่า'..." onkeypress="handleEnter(event)">
+                <button onclick="sendAction()">ส่ง</button>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
