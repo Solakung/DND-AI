@@ -76,7 +76,6 @@ window.onload = () => {
             }
             restoreControls();
         }
-        simulateMMO();
     } else {
         showScreen("select");
     }
@@ -191,7 +190,6 @@ function initGame() {
     setDiceEnabled(false);
     addMessage("system", `[System]: กำลังนำ ${character.name} เข้าสู่โลกกว้าง...`);
     startAdventure();
-    simulateMMO();
 }
 
 // ยิง request แรกให้ AI แต่งฉากเปิดเรื่องเอง แทนข้อความ system ตายตัว
@@ -263,9 +261,16 @@ function safeNarrative(text) {
     }
 }
 
-function rollD20() {
+// รองรับเต๋าหลายชนิดตามที่ GM ขอ (d4, d6, d8, d10, d12, d20, d100)
+function getDieSides(die) {
+    const sides = parseInt(String(die || "d20").toLowerCase().replace("d", ""), 10);
+    return Number.isInteger(sides) && sides >= 2 && sides <= 100 ? sides : 20;
+}
+
+function rollDie() {
     if (character.hp <= 0 || !pendingRoll || !pendingRoll.required) return;
     const die = pendingRoll.die || "d20";
+    const sides = getDieSides(die);
     let roll;
 
     if (Number.isInteger(pendingRoll.rolled)) {
@@ -273,7 +278,7 @@ function rollD20() {
         roll = pendingRoll.rolled;
         addMessage("system", `[Dice Roll]: ส่งผลทอยเดิมอีกครั้ง ${die} แต้ม <b>${roll}</b>`);
     } else {
-        roll = Math.floor(Math.random() * 20) + 1;
+        roll = Math.floor(Math.random() * sides) + 1;
         pendingRoll.rolled = roll;
         savePendingRoll(); // เก็บแต้มไว้ก่อนส่ง เผื่อเซิร์ฟเวอร์ล่มหรือผู้เล่นรีเฟรชหน้า
         addMessage("system", `[Dice Roll]: คุณทอย ${die} ได้แต้ม <b>${roll}</b>!`);
@@ -284,6 +289,9 @@ function rollD20() {
     // pendingRoll ยังไม่ล้าง จะล้าง/แทนที่ก็ต่อเมื่อ GM ตอบสำเร็จ (ใน callServer)
     callServer(rollText, { isRoll: true });
 }
+
+// คงชื่อเดิมไว้ให้ปุ่มใน index.html (onclick="rollD20()") ยังใช้ได้
+function rollD20() { rollDie(); }
 
 function handleEnter(event) {
     if (event.key === "Enter") sendAction();
@@ -304,10 +312,11 @@ function setInputEnabled(enabled) {
     inputField.disabled = !enabled;
 }
 
-function setDiceEnabled(enabled, label) {
+function setDiceEnabled(enabled, label, die) {
     const btn = document.querySelector(".dice-btn");
     btn.disabled = !enabled;
-    btn.textContent = enabled ? `🎲 ทอยเต๋า D20${label ? ` — ${label}` : ""}` : "🎲 รอ GM เรียกให้ทอยเต๋า...";
+    const dieName = String(die || "d20").toUpperCase();
+    btn.textContent = enabled ? `🎲 ทอยเต๋า ${dieName}${label ? ` — ${label}` : ""}` : "🎲 รอ GM เรียกให้ทอยเต๋า...";
 }
 
 function escapeHtml(str) {
@@ -410,7 +419,7 @@ function restoreControls() {
     }
     if (pendingRoll && pendingRoll.required) {
         setInputEnabled(false);
-        setDiceEnabled(true, pendingRoll.reason);
+        setDiceEnabled(true, pendingRoll.reason, pendingRoll.die);
     } else {
         setInputEnabled(true);
         setDiceEnabled(false);
@@ -463,20 +472,4 @@ function applyStateChanges(data) {
 
     saveCharacter();
     renderCharacterSheet();
-}
-
-function simulateMMO() {
-    const fakeEvents = [
-        "[World] xX_Slayer_Xx: รับคนลงดันเจี้ยนก็อบลิน ขาดฮีล 1 ที่!!",
-        "[System] ผู้เล่น 'MageGurl' ได้รับดาบหายากระดับ Epic",
-        "[Local] พ่อค้าเร่: ยาฟื้นฟูราคาถูกจ้า แวะดูได้!",
-        "[World] DarkLord: ใครเจอพิกัดบอสโลกบ้าง?"
-    ];
-
-    setInterval(() => {
-        if (character && character.hp > 0 && Math.random() > 0.5) {
-            let randomEvent = fakeEvents[Math.floor(Math.random() * fakeEvents.length)];
-            addMessage("mmo-bot", randomEvent);
-        }
-    }, 20000);
 }
