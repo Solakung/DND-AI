@@ -79,7 +79,7 @@ ${characterSheet}
         }
     };
 
-    const MODEL = "gemini-3.6-flash";
+    const MODEL = "gemini-3-flash";
 
     try {
         const googleResponse = await fetch(
