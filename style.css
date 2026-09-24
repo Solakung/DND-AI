@@ -1,6 +1,10 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-body { background-color: #1a1a1a; color: #e0e0e0; font-family: 'Courier New', Courier, monospace; min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 20px; overflow-x: hidden; }
+/* --vvh ถูกตั้งค่าโดย JS (window.visualViewport) เป็น fallback สำหรับเบราว์เซอร์ที่ dvh ยังทำงานไม่แม่นพอ
+   ถ้า JS ยังไม่รัน หรือเบราว์เซอร์ไม่รองรับ ให้ตกไปใช้ 100dvh แล้วค่อย fallback เป็น 100vh ตามลำดับ */
+:root { --vvh: 100dvh; }
+
+body { background-color: #1a1a1a; color: #e0e0e0; font-family: 'Courier New', Courier, monospace; min-height: 100vh; min-height: 100dvh; display: flex; justify-content: center; align-items: center; padding: 20px; overflow-x: hidden; }
 
 .screen { width: 100%; display: flex; justify-content: center; align-items: center; }
 
@@ -38,7 +42,7 @@ body { background-color: #1a1a1a; color: #e0e0e0; font-family: 'Courier New', Co
 .start-btn:hover { background: #45a049; }
 
 /* ============ หน้าเกม ============ */
-.container { display: flex; width: 95vw; max-width: 1200px; height: 90vh; background-color: #2b2b2b; border: 3px solid #555; border-radius: 8px; overflow: hidden; }
+.container { display: flex; width: 95vw; max-width: 1200px; height: 90vh; height: 90dvh; max-height: calc(var(--vvh) - 40px); background-color: #2b2b2b; border: 3px solid #555; border-radius: 8px; overflow: hidden; }
 
 .dnd-panel { width: 300px; min-width: 0; flex-shrink: 0; background-color: #222; border-right: 3px solid #555; padding: 20px; display: flex; flex-direction: column; overflow-x: hidden; overflow-y: auto; }
 .dnd-panel h2 { color: #d4af37; margin-bottom: 2px; overflow-wrap: anywhere; word-break: break-word; }
@@ -76,13 +80,31 @@ body { background-color: #1a1a1a; color: #e0e0e0; font-family: 'Courier New', Co
 .message.mmo-bot { color: #ff9900; font-size: 0.9em; }
 .message.event { color: #ffcc00; font-size: 0.9em; text-align: center; align-self: center; }
 
-.input-area { display: flex; padding: 15px; background-color: #222; border-top: 3px solid #555; }
+.input-area { display: flex; padding: 15px; padding-bottom: calc(15px + env(safe-area-inset-bottom, 0px)); background-color: #222; border-top: 3px solid #555; }
 .input-area input { flex-grow: 1; padding: 12px; background: #111; color: white; border: 1px solid #555; border-radius: 4px; font-size: 1em; font-family: inherit; }
 .input-area input:disabled { opacity: 0.5; }
 .input-area button { background-color: #4CAF50; color: white; border: none; padding: 0 25px; margin-left: 10px; cursor: pointer; border-radius: 4px; font-weight: bold; font-size: 1em; }
 
 @media (max-width: 700px) {
-    .container { flex-direction: column; height: 95vh; }
-    .dnd-panel { width: 100%; border-right: none; border-bottom: 3px solid #555; max-height: 40vh; }
+    /* จัดชิดบนแทนกึ่งกลาง: ถ้าคีย์บอร์ดเด้งแล้วพื้นที่เหลือน้อยกว่า container จะได้ล้นลงด้านล่างทางเดียว
+       (เลื่อนลงเพื่อดูช่องพิมพ์ได้ตามสัญชาตญาณ) แทนที่จะล้นทั้งบน-ล่างแบบตอน align-items:center */
+    body { align-items: flex-start; padding: 0; }
+    .screen { min-height: 100vh; min-height: var(--vvh); align-items: flex-start; }
+
+    .container {
+        flex-direction: column;
+        width: 100%;
+        max-width: none;
+        border-radius: 0;
+        border-left: none;
+        border-right: none;
+        /* ใช้ความสูงจริงที่มองเห็น (ตาม --vvh ที่ JS อัปเดตจาก visualViewport) แทน 95vh เดิม
+           เพื่อไม่ให้ input-area โดนคีย์บอร์ดบังหรือหลุดพ้นขอบจอ */
+        height: 100vh;
+        height: var(--vvh);
+        max-height: none;
+        padding-top: env(safe-area-inset-top, 0px);
+    }
+    .dnd-panel { width: 100%; border-right: none; border-bottom: 3px solid #555; max-height: 38vh; max-height: 38dvh; flex-shrink: 0; }
     .class-grid { grid-template-columns: 1fr; }
 }

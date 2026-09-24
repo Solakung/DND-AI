@@ -55,6 +55,26 @@ let isSummarizing = false; // กันยิง /api/summarize ซ้อนก�
 const chatLog = document.getElementById("chat-log");
 const inputField = document.getElementById("action-input");
 
+// ========================= แก้ปัญหาคีย์บอร์ดมือถือบังช่องพิมพ์/ปุ่มส่ง =========================
+// 100vh/100dvh ปกติจะคำนวณจาก layout viewport ซึ่งบางเบราว์เซอร์ (โดยเฉพาะ iOS Safari รุ่นเก่า)
+// ไม่อัปเดตตามพื้นที่ที่มองเห็นจริงหลังคีย์บอร์ดเด้ง เลยตั้ง CSS var --vvh จาก window.visualViewport
+// ไว้เป็น fallback ให้ .container/.screen อ้างอิงความสูงที่มองเห็นจริงเสมอ (ดู style.css)
+function syncVisualViewportHeight() {
+    if (!window.visualViewport) return;
+    document.documentElement.style.setProperty("--vvh", `${window.visualViewport.height}px`);
+}
+if (window.visualViewport) {
+    syncVisualViewportHeight();
+    window.visualViewport.addEventListener("resize", syncVisualViewportHeight);
+    window.visualViewport.addEventListener("scroll", syncVisualViewportHeight);
+}
+
+// พอโฟกัสช่องพิมพ์ คีย์บอร์ดมือถือเด้งช้ากว่า layout รีเฟรชเล็กน้อย (โดยเฉพาะ iOS) เลยรอเฟรมสั้นๆ
+// แล้วค่อยเลื่อนให้เห็นช่องพิมพ์/ปุ่มส่งแน่ๆ อีกที กันกรณี --vvh อัปเดตไม่ทัน
+inputField.addEventListener("focus", () => {
+    setTimeout(() => inputField.scrollIntoView({ block: "end", behavior: "smooth" }), 300);
+});
+
 // ========================= Init =========================
 window.onload = () => {
     renderClassGrid();
