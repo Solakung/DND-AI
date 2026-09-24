@@ -69,7 +69,7 @@ window.onload = () => {
             });
             pendingRoll = loadPendingRoll();
             if (pendingRoll && pendingRoll.required) {
-                addMessage("system", `[System]: 🎲 GM ขอให้คุณทอยเต๋าเพื่อ: ${pendingRoll.reason || "ตัดสินผลการกระทำ"}`);
+                addMessage("system", `[System]: 🎲 GM ขอให้คุณทอยเต๋าเพื่อ: ${escapeHtml(pendingRoll.reason || "ตัดสินผลการกระทำ")}${rollHint(pendingRoll)}`);
                 if (Number.isInteger(pendingRoll.rolled)) {
                     addMessage("system", `[System]: คุณทอยได้ <b>${pendingRoll.rolled}</b> ไปแล้วแต่ยังส่งไม่สำเร็จ กดปุ่มทอยเต๋าเพื่อส่งผลเดิมอีกครั้ง`);
                 }
@@ -261,37 +261,160 @@ function safeNarrative(text) {
     }
 }
 
-// รองรับเต๋าหลายชนิดตามที่ GM ขอ (d4, d6, d8, d10, d12, d20, d100)
+// ---------- เต๋า / โบนัสสถานะ ----------
+const STAT_LABEL = { str: "STR", dex: "DEX", int: "INT", con: "CON" };
+
 function getDieSides(die) {
     const sides = parseInt(String(die || "d20").toLowerCase().replace("d", ""), 10);
     return Number.isInteger(sides) && sides >= 2 && sides <= 100 ? sides : 20;
 }
 
+// โบนัสแบบ DnD: (ค่าสถานะ - 10) หารสองปัดลง เช่น 16 → +3, 12 → +1, 8 → -1
+function statMod(stat) {
+    const v = character && character.stats ? character.stats[stat] : undefined;
+    return Number.isFinite(v) ? Math.floor((v - 10) / 2) : 0;
+}
+
+function signed(n) { return n >= 0 ? `+${n}` : `${n}`; }
+function rollSides(sides) { return Math.floor(Math.random() * sides) + 1; }
+
+// คำอธิบายสั้นๆ ต่อท้ายข้อความตอน GM ขอให้ทอย
+function rollHint(pr) {
+    if (!pr) return "";
+    const die = pr.die || "d20";
+    const stat = STAT_LABEL[pr.stat];
+    const bonusPart = (die === "d20" && stat) ? ` + ${stat}` : "";
+    if (pr.opponent_name) return ` (${die}${bonusPart} แข่งกับ ${escapeHtml(pr.opponent_name)})`;
+    if (Number(pr.dc) > 0) return ` (${die}${bonusPart} เทียบ DC ${Number(pr.dc)})`;
+    return ` (${die}${bonusPart})`;
+}
+
 function rollDie() {
     if (character.hp <= 0 || !pendingRoll || !pendingRoll.required) return;
+
     const die = pendingRoll.die || "d20";
     const sides = getDieSides(die);
-    let roll;
+    const reason = pendingRoll.reason || "การกระทำล่าสุด";
+    const statKey = (die === "d20" && STAT_LABEL[pendingRoll.stat]) ? pendingRoll.stat : null;
+    const mod = statKey ? statMod(statKey) : 0;
+    const oppName = pendingRoll.opponent_name || "";
+    const oppBonus = Number(pendingRoll.opponent_bonus) || 0;
+    const dc = Number(pendingRoll.dc) || 0;
+    const isRetry = Number.isInteger(pendingRoll.rolled);
 
-    if (Number.isInteger(pendingRoll.rolled)) {
-        // เคยทอยไปแล้วแต่ส่งให้ GM ไม่สำเร็จ → ส่งแต้มเดิม ห้ามทอยใหม่
-        roll = pendingRoll.rolled;
-        addMessage("system", `[Dice Roll]: ส่งผลทอยเดิมอีกครั้ง ${die} แต้ม <b>${roll}</b>`);
+    // ทอยครั้งแรก: สุ่มแล้วเก็บไว้ก่อนส่ง (เผื่อเซิร์ฟเวอร์ล่ม/รีเฟรชหน้า) ถ้าเคยทอยแล้วจะใช้แต้มเดิม ห้ามทอยใหม่
+    if (!isRetry) {
+        pendingRoll.rolled = rollSides(sides);
+    }
+    if (oppName && !Number.isInteger(pendingRoll.oppRolled)) {
+        pendingRoll.oppRolled = rollSides(sides); // ศัตรูทอยด้วยระบบ ไม่ให้ AI แต่งเลขเอง
+    }
+    savePendingRoll();
+
+    const roll = pendingRoll.rolled;
+    const total = roll + mod;
+    const modText = statKey ? ` ${signed(mod)} ${STAT_LABEL[statKey]}` : "";
+    const prefix = isRetry ? "ส่งผลทอยเดิมอีกครั้ง — " : "";
+    let shownText;
+    let rollText;
+
+    if (oppName) {
+        // ทอยแข่งกับศัตรู/NPC
+        const oppRoll = pendingRoll.oppRolled;
+        const oppTotal = oppRoll + oppBonus;
+        const diff = total - oppTotal;
+        const verdict = diff > 0 ? "ฉันชนะ" : diff < 0 ? "ฉันแพ้" : "เสมอ";
+        const icon = diff > 0 ? "✅" : diff < 0 ? "❌" : "⚖️";
+        const oppModText = oppBonus !== 0 ? ` ${signed(oppBonus)}` : "";
+        const safeOpp = escapeHtml(oppName);
+        shownText = `[Dice Roll]: ${prefix}คุณ ${die}: ${roll}${modText} = <b>${total}</b> vs ${safeOpp}: ${oppRoll}${oppModText} = <b>${oppTotal}</b> → ${icon} ${verdict}`;
+        rollText = `ฉันทอย ${die} ได้ ${roll}${statKey ? ` บวกโบนัส ${STAT_LABEL[statKey]} ${signed(mod)}` : ""} = ${total} ส่วน ${oppName} ทอย ${die} ได้ ${oppRoll} บวกโบนัส ${signed(oppBonus)} = ${oppTotal} → ${verdict} (ส่วนต่าง ${signed(diff)}) สำหรับ: ${reason}`;
+    } else if (dc > 0) {
+        // เช็กเทียบ DC
+        const diff = total - dc;
+        const ok = total >= dc;
+        const verdict = ok ? "สำเร็จ" : "ล้มเหลว";
+        shownText = `[Dice Roll]: ${prefix}คุณ ${die}: ${roll}${modText} = <b>${total}</b> เทียบ DC ${dc} → ${ok ? "✅" : "❌"} ${verdict}`;
+        rollText = `ฉันทอย ${die} ได้ ${roll}${statKey ? ` บวกโบนัส ${STAT_LABEL[statKey]} ${signed(mod)}` : ""} = ${total} เทียบ DC ${dc} → ${verdict} (ส่วนต่าง ${signed(diff)}) สำหรับ: ${reason}`;
     } else {
-        roll = Math.floor(Math.random() * sides) + 1;
-        pendingRoll.rolled = roll;
-        savePendingRoll(); // เก็บแต้มไว้ก่อนส่ง เผื่อเซิร์ฟเวอร์ล่มหรือผู้เล่นรีเฟรชหน้า
-        addMessage("system", `[Dice Roll]: คุณทอย ${die} ได้แต้ม <b>${roll}</b>!`);
+        // ทอยธรรมดา (เต๋าความเสียหาย/การรักษา, d100 ฯลฯ)
+        shownText = `[Dice Roll]: ${prefix}คุณทอย ${die} ได้แต้ม <b>${roll}</b>${statKey ? `${modText} = <b>${total}</b>` : "!"}`;
+        rollText = `ฉันทอย ${die} ได้แต้ม ${roll}${statKey ? ` บวกโบนัส ${STAT_LABEL[statKey]} ${signed(mod)} = ${total}` : ""} สำหรับ: ${reason}`;
     }
 
-    const reason = pendingRoll.reason || "การกระทำล่าสุด";
-    const rollText = `ฉันทอย ${die} ได้แต้ม ${roll} สำหรับ: ${reason}`;
+    addMessage("system", shownText);
     // pendingRoll ยังไม่ล้าง จะล้าง/แทนที่ก็ต่อเมื่อ GM ตอบสำเร็จ (ใน callServer)
     callServer(rollText, { isRoll: true });
 }
 
 // คงชื่อเดิมไว้ให้ปุ่มใน index.html (onclick="rollD20()") ยังใช้ได้
 function rollD20() { rollDie(); }
+
+// ---------- กระเป๋า: ไอเทมแบบมีจำนวน "ชื่อ (xN)" ----------
+const QTY_RE = /\s*\(x(\d+)\)\s*$/i;
+
+function parseInvItem(str) {
+    const text = String(str);
+    const m = text.match(QTY_RE);
+    return { base: text.replace(QTY_RE, "").trim(), qty: m ? Math.max(1, parseInt(m[1], 10)) : 1 };
+}
+
+// คีย์ไว้เทียบชื่อ: ตัดจำนวนท้ายชื่อและอีโมจิ/สัญลักษณ์หน้าชื่อ
+function itemKey(name) {
+    return String(name).replace(QTY_RE, "").replace(/^[^\p{L}\p{N}]+/u, "").trim().toLowerCase();
+}
+
+function formatInvItem(base, qty, forceQty) {
+    return (qty > 1 || forceQty) ? `${base} (x${qty})` : base;
+}
+
+// รับได้ทั้ง {name, quantity} และข้อความเก่า
+function toItemEntry(x) {
+    if (typeof x === "string") {
+        const p = parseInvItem(x);
+        return p.base ? { name: p.base, quantity: p.qty } : null;
+    }
+    if (x && typeof x.name === "string") {
+        const p = parseInvItem(x.name);
+        const q = Math.trunc(Number(x.quantity));
+        return p.base ? { name: p.base, quantity: q >= 1 ? Math.min(q, 999) : p.qty } : null;
+    }
+    return null;
+}
+
+function findInventoryIndex(key, exactOnly) {
+    if (!key) return -1;
+    const exact = character.inventory.findIndex(i => itemKey(i) === key);
+    if (exact !== -1 || exactOnly) return exact;
+    return character.inventory.findIndex(i => {
+        const k = itemKey(i);
+        return k && (k.includes(key) || key.includes(k));
+    });
+}
+
+// ใช้/เสียไอเทมตามจำนวนที่ระบุ ไม่ลบทั้งกอง
+function removeFromInventory(entry) {
+    const idx = findInventoryIndex(itemKey(entry.name), false);
+    if (idx === -1) return null;
+    const cur = parseInvItem(character.inventory[idx]);
+    const used = Math.min(entry.quantity, cur.qty);
+    const remaining = cur.qty - used;
+    if (remaining > 0) character.inventory[idx] = formatInvItem(cur.base, remaining, true);
+    else character.inventory.splice(idx, 1);
+    return `➖ ${cur.base}${used > 1 ? ` x${used}` : ""}${remaining > 0 ? ` (เหลือ ${remaining})` : ""}`;
+}
+
+// ได้ไอเทมใหม่ ถ้ามีชนิดเดียวกันอยู่แล้วให้รวมกอง
+function addToInventory(entry) {
+    const idx = findInventoryIndex(itemKey(entry.name), true);
+    if (idx !== -1) {
+        const cur = parseInvItem(character.inventory[idx]);
+        character.inventory[idx] = formatInvItem(cur.base, cur.qty + entry.quantity, true);
+    } else {
+        character.inventory.push(formatInvItem(entry.name, entry.quantity, false));
+    }
+    return `➕ ได้รับไอเทม: ${entry.name}${entry.quantity > 1 ? ` x${entry.quantity}` : ""}`;
+}
 
 function handleEnter(event) {
     if (event.key === "Enter") sendAction();
@@ -377,7 +500,7 @@ async function callServer(playerText, opts = {}) {
     // ตั้งค่า pendingRoll ตามที่ AI ขอมา (ของเก่าที่ทอยแล้วถูกแทนที่/ล้างตรงนี้)
     if (data.roll_request && data.roll_request.required) {
         pendingRoll = data.roll_request;
-        addMessage("system", `[System]: 🎲 GM ขอให้คุณทอยเต๋าเพื่อ: ${pendingRoll.reason || "ตัดสินผลการกระทำ"}`);
+        addMessage("system", `[System]: 🎲 GM ขอให้คุณทอยเต๋าเพื่อ: ${escapeHtml(pendingRoll.reason || "ตัดสินผลการกระทำ")}${rollHint(pendingRoll)}`);
     } else {
         pendingRoll = null;
     }
@@ -445,19 +568,15 @@ function applyStateChanges(data) {
     }
 
     if (Array.isArray(data.remove_items)) {
-        data.remove_items.forEach(item => {
-            const idx = character.inventory.findIndex(i => i.includes(item) || item.includes(i));
-            if (idx !== -1) {
-                events.push(`➖ ${character.inventory[idx]}`);
-                character.inventory.splice(idx, 1);
-            }
+        data.remove_items.map(toItemEntry).filter(Boolean).forEach(entry => {
+            const msg = removeFromInventory(entry);
+            if (msg) events.push(msg);
         });
     }
 
     if (Array.isArray(data.add_items)) {
-        data.add_items.forEach(item => {
-            character.inventory.push(item);
-            events.push(`➕ ได้รับไอเทม: ${item}`);
+        data.add_items.map(toItemEntry).filter(Boolean).forEach(entry => {
+            events.push(addToInventory(entry));
         });
     }
 

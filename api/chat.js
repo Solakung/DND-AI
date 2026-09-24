@@ -11,6 +11,15 @@ const DEBUG_META = process.env.DEBUG_META === "1";                          // �
 
 const VALID_STATUS = ["ปกติ", "บาดเจ็บสาหัส", "หมดสติ", "เสียชีวิต"];
 const VALID_DICE = ["d4", "d6", "d8", "d10", "d12", "d20", "d100"];
+const VALID_STATS = ["str", "dex", "int", "con", "none"];
+const ITEM_SCHEMA = {
+    type: "OBJECT",
+    properties: {
+        name: { type: "STRING", description: "ชื่อไอเทมให้ตรงกับที่อยู่ในกระเป๋า ไม่ต้องใส่จำนวน (xN)" },
+        quantity: { type: "INTEGER", description: "จำนวนที่เพิ่ม/ใช้จริงในครั้งนี้ อย่างน้อย 1" }
+    },
+    required: ["name", "quantity"]
+};
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 export default async function handler(req, res) {
@@ -47,25 +56,32 @@ ${characterSheet}
 ฉากเปิดเรื่องนี้ห้ามขอให้ทอยเต๋า (roll_request.required ต้องเป็น false) และห้ามมี hp_change/gold_change/add_items/remove_items ใดๆ (ให้เป็นค่าว่าง/0 ทั้งหมด)
 
 === กฎการทอยเต๋าแบบ DnD (สำคัญมาก) ===
-คุณคือคนตัดสินว่าเมื่อไหร่ต้องทอยเต๋า ไม่ใช่ผู้เล่น:
-- ถ้าการกระทำของผู้เล่นมีความเสี่ยง/ไม่แน่นอน/ต้องใช้ทักษะ (เช่น โจมตี, ปีนป่าย, หลบหลีก, เจรจา, ลอบเร้น) ให้ตั้ง roll_request.required = true พร้อมระบุเหตุผลสั้นๆใน roll_request.reason (เช่น "ทดสอบความแข็งแกร่งในการดันประตู") และเลือกชนิดเต๋าใน roll_request.die ให้เหมาะกับสถานการณ์:
-    - d20: การทดสอบทักษะ/การโจมตี/การหลบหลีก/การเจรจา (ใช้เป็นค่าเริ่มต้นเมื่อไม่แน่ใจ)
-    - d4, d6, d8, d10, d12: ตัดสินความแรงของความเสียหายหรือการรักษา (อาวุธเบา/เวทเล็กใช้ d4-d6, ระดับกลางใช้ d8, หนักมากใช้ d10-d12) ใช้หลังผลทอย d20 สำเร็จ หรือเมื่อสถานการณ์ต้องการสุ่มปริมาณโดยตรง
-    - d100: เหตุการณ์สุ่มหลายระดับ เช่น ของที่ตกหลังการต่อสู้, ผลข้างเคียงของเวทที่ควบคุมไม่ได้, การเจอเหตุการณ์แปลกๆ ระหว่างเดินทาง
-  - เมื่อขอให้ทอยเต๋า: narrative ให้บรรยายสถานการณ์ที่นำไปสู่การทอยเต๋าเท่านั้น ห้ามสรุปผลลัพธ์ล่วงหน้า และห้ามใส่ hp_change/gold_change/add_items/remove_items ในรอบนี้ (ให้เป็นค่าว่าง/0 ทั้งหมด) เพราะยังไม่รู้ผล
+คุณคือคนตัดสินว่าเมื่อไหร่ต้องทอยเต๋า ไม่ใช่ผู้เล่น ระบบหลังบ้านเป็นคนสุ่มเลขและบวกโบนัสตามค่าสถานะให้เอง (โบนัส = (ค่าสถานะ - 10) หารสองปัดลง) คุณห้ามสุ่มหรือแต่งแต้มเต๋าเอง:
+- ถ้าการกระทำของผู้เล่นมีความเสี่ยง/ไม่แน่นอน/ต้องใช้ทักษะ ให้ตั้ง roll_request.required = true พร้อม roll_request.reason สั้นๆ (เช่น "ทดสอบความแข็งแกร่งในการดันประตู") แล้วเลือกรูปแบบการทอยหนึ่งแบบ:
+  1) เช็กเทียบระดับความยาก (DC): ใช้กับสิ่งแวดล้อม/สิ่งกีดขวาง เช่น ปีนกำแพง งัดประตู ปลดกับดัก ตั้ง die = "d20", stat = ค่าสถานะที่เกี่ยวข้อง (str/dex/int/con), dc = ระดับความยาก, opponent_name = "" และ opponent_bonus = 0
+     ระดับ DC: ง่าย 8-10, ปานกลาง 12-13, ยาก 15, ยากมาก 18, เกือบเป็นไปไม่ได้ 20 ขึ้นไป
+  2) ทอยแข่งกับศัตรู/NPC: ใช้เมื่อมีฝ่ายตรงข้ามต่อต้านโดยตรง เช่น ต่อสู้ ลอบเร้นผ่านยาม เจรจาต่อรอง ตั้ง die = "d20", stat = ค่าสถานะฝั่งผู้เล่น, opponent_name = ชื่อคู่ต่อสู้ (เช่น "ก็อบลินนักรบ"), opponent_bonus = พลังของศัตรู (อ่อน 0-1, ปกติ +2, แข็ง +3 ถึง +4, บอส +5 ถึง +6), dc = 0
+     ถ้าศัตรูเป็นฝ่ายโจมตีผู้เล่น ให้ผู้เล่นทอยป้องกัน/หลบ (เช่น stat = dex) แข่งกับศัตรูในรูปแบบเดียวกัน
+  3) เต๋าความเสียหาย/การรักษา: ใช้หลังฝ่ายที่ลงมือชนะ หรือเมื่อต้องสุ่มปริมาณโดยตรง เลือก d4, d6, d8, d10 หรือ d12 (อาวุธเบา/เวทเล็ก d4-d6, ระดับกลาง d8, หนักมาก d10-d12) และตั้ง stat = "none", dc = 0, opponent_name = ""
+  4) เหตุการณ์สุ่มหลายระดับ (ของที่ตกหลังสู้, ผลข้างเคียงของเวท, เหตุการณ์แปลกระหว่างเดินทาง): ใช้ d100 และตั้ง stat = "none", dc = 0, opponent_name = ""
+  - เมื่อขอให้ทอยเต๋า: narrative ให้บรรยายสถานการณ์ที่นำไปสู่การทอยเท่านั้น ห้ามสรุปผลลัพธ์ล่วงหน้า และห้ามใส่ hp_change/gold_change/add_items/remove_items ในรอบนี้ (ให้เป็นค่าว่าง/0 ทั้งหมด) เพราะยังไม่รู้ผล
 - ถ้าการกระทำของผู้เล่นเป็นเรื่องปกติ ไม่มีความเสี่ยง (เช่น เดิน, พูดคุยทั่วไป, สำรวจ) ให้ตอบผลลัพธ์ไปเลยโดย roll_request.required = false ไม่ต้องทอยเต๋า
-- เมื่อข้อความจากผู้เล่นบอกผลการทอยเต๋าที่คุณขอไปก่อนหน้า (เช่น "ฉันทอย d20 ได้แต้ม N สำหรับ: ...") ให้ตัดสินผลลัพธ์ตามแต้มที่ทอยได้ทันที:
-  - ให้ประเมินแต้มเป็นสัดส่วนของหน้าสูงสุดของเต๋าที่ทอย (เช่น d20 ได้ 4 = ต่ำ, d100 ได้ 92 = สูง):
-    - ต่ำ (ไม่เกิน ~40% ของหน้าสูงสุด เช่น d20 ได้ 1-8): ผลลัพธ์แย่ลง เช่น โดนโจมตีจนเสีย HP (hp_change เป็นลบ)
-    - กลาง (~41-70% เช่น d20 ได้ 9-14): ผลลัพธ์ก้ำกึ่ง สำเร็จบางส่วน
-    - สูง (~71-100% เช่น d20 ได้ 15-20): ผลลัพธ์ออกมาดี อาจได้ไอเทมหรือทองเพิ่ม
-  - ถ้าเป็นเต๋าความเสียหาย/การรักษา (d4-d12) ให้ใช้แต้มที่ทอยได้เป็นปริมาณ hp_change โดยตรง (เช่น d8 ได้ 5 = ประมาณ 5 HP) ส่วนจะเป็นลบหรือบวกให้ดูตามเนื้อเรื่อง
-  - รอบนี้ roll_request.required ให้เป็น false เว้นแต่ผลของการทอยนำไปสู่สถานการณ์เสี่ยงใหม่ทันที
+- เมื่อผู้เล่นส่งผลทอย (ข้อความขึ้นต้นว่า "ฉันทอย") ระบบคำนวณผลสรุปให้แล้ว เช่น "→ สำเร็จ", "→ ล้มเหลว", "→ ฉันชนะ", "→ ฉันแพ้", "→ เสมอ" พร้อมส่วนต่าง ให้ยึดผลสรุปนั้นเสมอ ห้ามกลับผล และใช้ส่วนต่างกำหนดความรุนแรง:
+  - ส่วนต่าง +5 ขึ้นไป: สำเร็จอย่างงดงาม อาจได้รางวัลเพิ่ม
+  - ส่วนต่าง 0 ถึง +4: สำเร็จแบบเฉียดฉิว
+  - ส่วนต่าง -1 ถึง -4: ล้มเหลวแต่ยังไม่เสียหายหนัก อาจมีผลข้างเคียงเบา
+  - ส่วนต่าง -5 ลงไป: พลาดหนัก เสีย HP ได้ (hp_change เป็นลบ)
+  - เสมอ: สถานการณ์ตึงเครียด ไม่มีใครได้เปรียบชัดเจน
+- ถ้าผลทอยเป็นเต๋าความเสียหาย/การรักษา (d4-d12): ใช้แต้มที่ทอยได้เป็นปริมาณ hp_change โดยตรง (เช่น d8 ได้ 5 = ประมาณ 5 HP) จะเป็นลบหรือบวกดูตามเนื้อเรื่อง ระบบเก็บ HP ของผู้เล่นเท่านั้น ไม่ได้ติดตาม HP ของศัตรู ให้คุณเล่าสภาพของศัตรูในเนื้อเรื่องเอง
+- ถ้าเป็น d100 ให้ประเมินตามสัดส่วน: 1-40 ผลแย่, 41-70 ก้ำกึ่ง, 71-100 ผลดี
+- รอบที่ตัดสินผลแล้ว roll_request.required ให้เป็น false เว้นแต่ผลนำไปสู่ขั้นตอนต่อไปทันที (เช่น โจมตีสำเร็จแล้วต้องขอทอยเต๋าความเสียหาย) หรือสถานการณ์เสี่ยงใหม่
 
 === กฎอื่นๆ ===
 - ปรับ hp_change ให้สมเหตุสมผลกับสถานการณ์ (ทั่วไปไม่เกิน -8 ต่อครั้ง เว้นแต่สถานการณ์อันตรายมาก)
 - ถ้า HP ของผู้เล่นจะลดลงเหลือ 0 หรือต่ำกว่า ให้ตั้ง status เป็น "หมดสติ" หรือ "เสียชีวิต" ตามความเหมาะสมของเนื้อเรื่อง (ส่วนใหญ่ให้ "หมดสติ" ไม่ต้องเสียชีวิตง่ายๆ)
-- เพิ่ม/ลดไอเทมเฉพาะเมื่อเนื้อเรื่องสมเหตุสมผลจริงๆ เช่น เก็บของจากศัตรู ซื้อของ ใช้ไอเทมหมด
+- เพิ่ม/ลดไอเทมเฉพาะเมื่อเนื้อเรื่องสมเหตุสมผลจริงๆ เช่น เก็บของจากศัตรู ซื้อของ ใช้ไอเทม
+- add_items/remove_items เป็นรายการ {name, quantity} ตั้งชื่อให้ตรงกับที่อยู่ในกระเป๋า (ไม่ต้องใส่ (xN)) และ quantity คือจำนวนที่ใช้/ได้จริงในครั้งนี้ ระบบจะหักหรือเพิ่มในกองให้เอง เช่น ดื่มโพชั่น 1 ขวด = quantity 1 ห้ามลบทั้งกองเว้นแต่เนื้อเรื่องทำให้ทั้งกองหายจริงๆ (เช่น ถูกขโมย ตกน้ำ) ซึ่งให้ใส่จำนวนทั้งหมดที่หาย
+- ถ้าผู้เล่นระบุจำนวนที่ใช้ (เช่น "ดื่มโพชั่น 2 ขวด") ให้ใช้ตามจำนวนนั้น ถ้าในกระเป๋ามีไม่พอให้เล่าว่าไม่พอและไม่หักเกินที่มี
 - ห้ามใส่ข้อความ JSON หรือ markdown ลงใน narrative ให้เป็นข้อความเล่าเรื่องล้วนๆ`;
 
     const payload = {
@@ -80,8 +96,8 @@ ${characterSheet}
                     hp_change: { type: "INTEGER", description: "การเปลี่ยนแปลง HP ปัจจุบัน (ลบ=เสีย HP, บวก=ฟื้นฟู, 0=ไม่เปลี่ยน)" },
                     max_hp_change: { type: "INTEGER", description: "การเปลี่ยนแปลง HP สูงสุด ปกติเป็น 0 ยกเว้นเลเวลอัพ" },
                     gold_change: { type: "INTEGER", description: "การเปลี่ยนแปลงทอง (ลบ=เสียทอง, บวก=ได้ทอง)" },
-                    add_items: { type: "ARRAY", items: { type: "STRING" }, description: "รายการไอเทมที่ได้รับใหม่ (ถ้าไม่มีให้เป็น array ว่าง)" },
-                    remove_items: { type: "ARRAY", items: { type: "STRING" }, description: "รายการไอเทมที่ถูกใช้/เสียไป (ถ้าไม่มีให้เป็น array ว่าง)" },
+                    add_items: { type: "ARRAY", items: ITEM_SCHEMA, description: "ไอเทมที่ได้รับใหม่ พร้อมจำนวน (ถ้าไม่มีให้เป็น array ว่าง)" },
+                    remove_items: { type: "ARRAY", items: ITEM_SCHEMA, description: "ไอเทมที่ถูกใช้/เสียไป พร้อมจำนวนที่ใช้จริง (ถ้าไม่มีให้เป็น array ว่าง)" },
                     status: { type: "STRING", enum: VALID_STATUS },
                     roll_request: {
                         type: "OBJECT",
@@ -89,9 +105,13 @@ ${characterSheet}
                         properties: {
                             required: { type: "BOOLEAN" },
                             die: { type: "STRING", enum: VALID_DICE },
-                            reason: { type: "STRING", description: "เหตุผลสั้นๆว่าทอยเพื่ออะไร (ค่าว่างถ้า required=false)" }
+                            reason: { type: "STRING", description: "เหตุผลสั้นๆว่าทอยเพื่ออะไร (ค่าว่างถ้า required=false)" },
+                            stat: { type: "STRING", enum: VALID_STATS, description: "ค่าสถานะของผู้เล่นที่ใช้บวกโบนัส (เฉพาะ d20) ถ้าไม่เกี่ยวข้องให้เป็น none" },
+                            dc: { type: "INTEGER", description: "ระดับความยากที่ต้องทอยให้ถึง (เช็กเทียบ DC) ถ้าไม่ใช้ให้เป็น 0" },
+                            opponent_name: { type: "STRING", description: "ชื่อคู่ต่อสู้ในการทอยแข่ง ถ้าไม่ใช่การทอยแข่งให้เป็นข้อความว่าง" },
+                            opponent_bonus: { type: "INTEGER", description: "โบนัสของคู่ต่อสู้ในการทอยแข่ง ถ้าไม่ใช่การทอยแข่งให้เป็น 0" }
                         },
-                        required: ["required", "die", "reason"]
+                        required: ["required", "die", "reason", "stat", "dc", "opponent_name", "opponent_bonus"]
                     }
                 },
                 required: ["narrative", "hp_change", "gold_change", "add_items", "remove_items", "status", "roll_request"]
@@ -210,21 +230,49 @@ async function tryModel(model, payload, apiKey) {
 // กันค่าเพี้ยนจากรุ่นเล็ก เช่น hp_change เป็นข้อความ, items ไม่ใช่ array
 function normalize(p) {
     const int = (v) => (Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : 0);
-    const arr = (v) => (Array.isArray(v) ? v.filter(x => typeof x === "string" && x.trim()) : []);
+    const QTY_RE = /\s*\(x(\d+)\)\s*$/i;
+
+    // รับได้ทั้งแบบ {name, quantity} และข้อความเก่า เช่น "โพชั่น (x3)"
+    const items = (v) => (Array.isArray(v) ? v : []).map(x => {
+        if (typeof x === "string") {
+            const m = x.match(QTY_RE);
+            const name = x.replace(QTY_RE, "").trim();
+            return name ? { name, quantity: m ? Math.max(1, parseInt(m[1], 10)) : 1 } : null;
+        }
+        if (x && typeof x.name === "string") {
+            const m = x.name.match(QTY_RE);
+            const name = x.name.replace(QTY_RE, "").trim();
+            const q = int(x.quantity);
+            return name ? { name, quantity: Math.min(999, q >= 1 ? q : (m ? Math.max(1, parseInt(m[1], 10)) : 1)) } : null;
+        }
+        return null;
+    }).filter(Boolean);
+
     const rr = p.roll_request && typeof p.roll_request === "object" ? p.roll_request : {};
     const needRoll = rr.required === true;
+    const oppName = needRoll && typeof rr.opponent_name === "string" ? rr.opponent_name.trim() : "";
+    const contest = oppName !== "";                                  // ทอยแข่งกับศัตรู
+    const dcValue = Math.max(0, Math.min(30, int(rr.dc)));
+    const check = needRoll && !contest && dcValue > 0;               // เช็กเทียบ DC
+    const die = (contest || check) ? "d20" : (VALID_DICE.includes(rr.die) ? rr.die : "d20");
+    const stat = (die === "d20" && VALID_STATS.includes(rr.stat)) ? rr.stat : "none";
+
     return {
         narrative: p.narrative.trim(),
         hp_change: int(p.hp_change),
         max_hp_change: int(p.max_hp_change),
         gold_change: int(p.gold_change),
-        add_items: arr(p.add_items),
-        remove_items: arr(p.remove_items),
+        add_items: items(p.add_items),
+        remove_items: items(p.remove_items),
         status: VALID_STATUS.includes(p.status) ? p.status : "ปกติ",
         roll_request: {
             required: needRoll,
-            die: VALID_DICE.includes(rr.die) ? rr.die : "d20",
-            reason: needRoll ? String(rr.reason || "") : ""
+            die,
+            reason: needRoll ? String(rr.reason || "") : "",
+            stat: needRoll ? stat : "none",
+            dc: check ? dcValue : 0,
+            opponent_name: contest ? oppName : "",
+            opponent_bonus: contest ? Math.max(-5, Math.min(10, int(rr.opponent_bonus))) : 0
         }
     };
 }
