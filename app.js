@@ -41,7 +41,8 @@ const CLASS_PRESETS = [
 // ========================= State =========================
 let character = null;
 let conversationHistory = [];
-let pendingRoll = null; // { required, die, reason } - ตั้งค่าเมื่อ AI ขอให้ทอยเต๋า
+let pendingRoll = null; // { required, die, reason, rolled? } - ตั้งค่าเมื่อ AI ขอให้ทอยเต๋า (rolled = แต้มที่ทอยแล้วแต่ยังส่งไม่สำเร็จ)
+let failedRequest = null; // { text, opts } - คำขอปกติ/ฉากเปิดเรื่องที่ส่งไม่สำเร็จ ไว้ให้กดลองใหม่
 
 const chatLog = document.getElementById("chat-log");
 const inputField = document.getElementById("action-input");
@@ -69,6 +70,9 @@ window.onload = () => {
             pendingRoll = loadPendingRoll();
             if (pendingRoll && pendingRoll.required) {
                 addMessage("system", `[System]: 🎲 GM ขอให้คุณทอยเต๋าเพื่อ: ${pendingRoll.reason || "ตัดสินผลการกระทำ"}`);
+                if (Number.isInteger(pendingRoll.rolled)) {
+                    addMessage("system", `[System]: คุณทอยได้ <b>${pendingRoll.rolled}</b> ไปแล้วแต่ยังส่งไม่สำเร็จ กดปุ่มทอยเต๋าเพื่อส่งผลเดิมอีกครั้ง`);
+                }
             }
             restoreControls();
         }
@@ -203,6 +207,7 @@ function resetGame() {
     character = null;
     conversationHistory = [];
     pendingRoll = null;
+    failedRequest = null;
     chatLog.innerHTML = "";
     showScreen("select");
 }
@@ -260,13 +265,24 @@ function safeNarrative(text) {
 
 function rollD20() {
     if (character.hp <= 0 || !pendingRoll || !pendingRoll.required) return;
-    let roll = Math.floor(Math.random() * 20) + 1;
-    addMessage("system", `[Dice Roll]: คุณทอย ${pendingRoll.die || "d20"} ได้แต้ม <b>${roll}</b>!`);
+    const die = pendingRoll.die || "d20";
+    let roll;
+
+    if (Number.isInteger(pendingRoll.rolled)) {
+        // เคยทอยไปแล้วแต่ส่งให้ GM ไม่สำเร็จ → ส่งแต้มเดิม ห้ามทอยใหม่
+        roll = pendingRoll.rolled;
+        addMessage("system", `[Dice Roll]: ส่งผลทอยเดิมอีกครั้ง ${die} แต้ม <b>${roll}</b>`);
+    } else {
+        roll = Math.floor(Math.random() * 20) + 1;
+        pendingRoll.rolled = roll;
+        savePendingRoll(); // เก็บแต้มไว้ก่อนส่ง เผื่อเซิร์ฟเวอร์ล่มหรือผู้เล่นรีเฟรชหน้า
+        addMessage("system", `[Dice Roll]: คุณทอย ${die} ได้แต้ม <b>${roll}</b>!`);
+    }
+
     const reason = pendingRoll.reason || "การกระทำล่าสุด";
-    const rollText = `ฉันทอย ${pendingRoll.die || "d20"} ได้แต้ม ${roll} สำหรับ: ${reason}`;
-    pendingRoll = null;
-    savePendingRoll();
-    callServer(rollText);
+    const rollText = `ฉันทอย ${die} ได้แต้ม ${roll} สำหรับ: ${reason}`;
+    // pendingRoll ยังไม่ล้าง จะล้าง/แทนที่ก็ต่อเมื่อ GM ตอบสำเร็จ (ใน callServer)
+    callServer(rollText, { isRoll: true });
 }
 
 function handleEnter(event) {
@@ -277,6 +293,8 @@ function sendAction() {
     if (character.hp <= 0 || (pendingRoll && pendingRoll.required)) return;
     const text = inputField.value.trim();
     if (!text) return;
+    failedRequest = null;
+    document.querySelectorAll(".retry-btn").forEach(b => b.remove());
     addMessage("player", `> ${text}`);
     inputField.value = "";
     callServer(text);
@@ -292,12 +310,19 @@ function setDiceEnabled(enabled, label) {
     btn.textContent = enabled ? `🎲 ทอยเต๋า D20${label ? ` — ${label}` : ""}` : "🎲 รอ GM เรียกให้ทอยเต๋า...";
 }
 
+function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+
 async function callServer(playerText, opts = {}) {
     setInputEnabled(false);
     setDiceEnabled(false);
     const loadingMsg = addMessage("system", "[System]: GM กำลังประมวลผล...");
 
     conversationHistory.push({ role: "user", parts: [{ text: playerText }] });
+
+    let data = null;
+    let errorReason = "";
 
     try {
         const response = await fetch('/api/chat', {
@@ -306,49 +331,79 @@ async function callServer(playerText, opts = {}) {
             body: JSON.stringify({ history: conversationHistory, character })
         });
 
-        loadingMsg.remove();
+        try { data = await response.json(); } catch { data = null; } // เช่น Vercel timeout ตอบเป็น HTML/ข้อความ
 
-        if (response.status === 429) {
-            addMessage("system", "[System]: เซิร์ฟเวอร์ทำงานหนักเกินไป (Rate Limit) กรุณารอสักครู่แล้วลองใหม่");
-            conversationHistory.pop();
-            restoreControls();
-            return;
+        if (!data || !data.narrative) {
+            errorReason = (data && data.error)
+                ? `เซิร์ฟเวอร์ตอบกลับผิดพลาด - ${data.error}`
+                : (response.status === 429
+                    ? "เซิร์ฟเวอร์ทำงานหนักเกินไป (Rate Limit) กรุณารอสักครู่แล้วลองใหม่"
+                    : `เซิร์ฟเวอร์ตอบกลับผิดปกติ (HTTP ${response.status})`);
+            data = null;
         }
-
-        const data = await response.json();
-
-        if (!data.narrative) {
-            addMessage("system", `[Error]: เซิร์ฟเวอร์ตอบกลับผิดพลาด - ${data.error || "ไม่ทราบสาเหตุ"}`);
-            conversationHistory.pop();
-            restoreControls();
-            return;
-        }
-
-        addMessage("gm", data.narrative);
-        conversationHistory.push({ role: "model", parts: [{ text: data.narrative }] });
-        saveHistory();
-
-        applyStateChanges(data);
-
-        // ตั้งค่า pendingRoll ตามที่ AI ขอมา
-        if (data.roll_request && data.roll_request.required) {
-            pendingRoll = data.roll_request;
-            addMessage("system", `[System]: 🎲 GM ขอให้คุณทอยเต๋าเพื่อ: ${pendingRoll.reason || "ตัดสินผลการกระทำ"}`);
-        } else {
-            pendingRoll = null;
-        }
-        savePendingRoll();
-        restoreControls();
     } catch (error) {
-        loadingMsg.remove();
-        addMessage("system", `[Error]: การเชื่อมต่อล้มเหลว - ${error.message}`);
-        conversationHistory.pop();
-        restoreControls();
+        errorReason = `การเชื่อมต่อล้มเหลว - ${error.message}`;
+        data = null;
     }
+
+    loadingMsg.remove();
+
+    // ----- ล้มเหลว: ถอยสถานะกลับ แล้วเปิดทางให้ลองใหม่โดยไม่เสียแต้มทอย/ข้อความที่พิมพ์ -----
+    if (!data) {
+        conversationHistory.pop();
+        handleFailure(playerText, opts, errorReason);
+        return;
+    }
+
+    // ----- สำเร็จ -----
+    failedRequest = null;
+    if (data._model) console.log("[GM model]", data._model, data._attempts); // มีเมื่อเปิด DEBUG_META=1 ฝั่งเซิร์ฟเวอร์
+
+    addMessage("gm", data.narrative);
+    conversationHistory.push({ role: "model", parts: [{ text: data.narrative }] });
+    saveHistory();
+
+    applyStateChanges(data);
+
+    // ตั้งค่า pendingRoll ตามที่ AI ขอมา (ของเก่าที่ทอยแล้วถูกแทนที่/ล้างตรงนี้)
+    if (data.roll_request && data.roll_request.required) {
+        pendingRoll = data.roll_request;
+        addMessage("system", `[System]: 🎲 GM ขอให้คุณทอยเต๋าเพื่อ: ${pendingRoll.reason || "ตัดสินผลการกระทำ"}`);
+    } else {
+        pendingRoll = null;
+    }
+    savePendingRoll();
+    restoreControls();
+}
+
+function handleFailure(playerText, opts, reason) {
+    addMessage("system", `[Error]: ${escapeHtml(reason)}`);
+
+    if (opts.isRoll) {
+        // pendingRoll (พร้อมแต้มที่ทอยแล้ว) ยังอยู่ → ปุ่มทอยจะส่งแต้มเดิมซ้ำ
+        addMessage("system", `[System]: เก็บผลทอย <b>${pendingRoll ? pendingRoll.rolled : "-"}</b> ไว้แล้ว กดปุ่มทอยเต๋าเพื่อส่งอีกครั้ง จะไม่ทอยใหม่`);
+    } else {
+        failedRequest = { text: playerText, opts };
+        addMessage("system", `[System]: ส่งไม่สำเร็จ <button class="retry-btn" onclick="retryFailed()" style="margin-left:8px;padding:4px 10px;background:#4CAF50;color:#fff;border:none;border-radius:4px;cursor:pointer;font-family:inherit;">🔁 ลองส่งอีกครั้ง</button>`);
+    }
+    restoreControls();
+}
+
+function retryFailed() {
+    if (!failedRequest) return;
+    const { text, opts } = failedRequest;
+    failedRequest = null;
+    document.querySelectorAll(".retry-btn").forEach(b => b.remove());
+    callServer(text, opts);
 }
 
 function restoreControls() {
     if (character.hp <= 0) {
+        setInputEnabled(false);
+        setDiceEnabled(false);
+        return;
+    }
+    if (failedRequest && failedRequest.opts && failedRequest.opts.hidePlayerBubble) {
         setInputEnabled(false);
         setDiceEnabled(false);
         return;
