@@ -1,21 +1,71 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-body { background-color: #1a1a1a; color: #e0e0e0; font-family: 'Courier New', Courier, monospace; height: 100vh; display: flex; justify-content: center; align-items: center; }
+body { background-color: #1a1a1a; color: #e0e0e0; font-family: 'Courier New', Courier, monospace; min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 20px; }
 
-.container { display: flex; width: 95%; max-width: 1200px; height: 90vh; background-color: #2b2b2b; border: 3px solid #555; border-radius: 8px; overflow: hidden; }
+.screen { width: 100%; display: flex; justify-content: center; align-items: center; }
 
-/* ฝั่งซ้าย */
-.dnd-panel { width: 300px; background-color: #222; border-right: 3px solid #555; padding: 20px; display: flex; flex-direction: column; }
-.dnd-panel h2, .dnd-panel h3 { color: #d4af37; margin-bottom: 15px; border-bottom: 1px solid #555; padding-bottom: 5px; }
-.stats { display: flex; flex-direction: column; gap: 10px; }
+/* ============ หน้าเลือกตัวละคร / Custom ============ */
+.create-box { width: 95%; max-width: 700px; background-color: #2b2b2b; border: 3px solid #555; border-radius: 8px; padding: 30px; }
+.create-box h1 { color: #d4af37; margin-bottom: 8px; text-align: center; }
+.create-box .sub { text-align: center; color: #999; margin-bottom: 25px; font-size: 0.9em; }
+
+.class-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
+.class-card { background: #333; border: 2px solid #555; border-radius: 6px; padding: 15px; cursor: pointer; transition: 0.2s; }
+.class-card:hover { border-color: #d4af37; background: #3a3a3a; }
+.class-card h3 { color: #d4af37; margin-bottom: 8px; }
+.class-card .class-stats { font-size: 0.85em; color: #bbb; margin-bottom: 8px; }
+.class-card .class-desc { font-size: 0.85em; color: #999; line-height: 1.4; }
+
+.custom-btn { width: 100%; background-color: #444; color: #e0e0e0; border: 1px solid #666; padding: 14px; font-size: 1em; font-weight: bold; cursor: pointer; border-radius: 4px; font-family: inherit; }
+.custom-btn:hover { background-color: #555; }
+
+.field-label { display: block; margin: 15px 0 6px; color: #d4af37; font-size: 0.9em; }
+.text-input, .text-area { width: 100%; padding: 10px; background: #111; color: white; border: 1px solid #555; border-radius: 4px; font-family: inherit; font-size: 1em; }
+.text-area { min-height: 80px; resize: vertical; }
+
+.point-buy { background: #222; border-radius: 6px; padding: 15px; margin-top: 10px; }
+.point-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; }
+.point-row span:first-child { flex-grow: 1; }
+.point-row span:nth-child(3) { width: 30px; text-align: center; font-weight: bold; }
+.point-row button { width: 28px; height: 28px; background: #8b0000; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em; }
+.point-row button:hover { background: #a50000; }
+
+.button-row { display: flex; gap: 10px; margin-top: 20px; }
+.back-btn, .start-btn { flex: 1; padding: 12px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-family: inherit; font-size: 1em; }
+.back-btn { background: #444; color: #ccc; }
+.back-btn:hover { background: #555; }
+.start-btn { background: #4CAF50; color: white; }
+.start-btn:hover { background: #45a049; }
+
+/* ============ หน้าเกม ============ */
+.container { display: flex; width: 95vw; max-width: 1200px; height: 90vh; background-color: #2b2b2b; border: 3px solid #555; border-radius: 8px; overflow: hidden; }
+
+.dnd-panel { width: 300px; background-color: #222; border-right: 3px solid #555; padding: 20px; display: flex; flex-direction: column; overflow-y: auto; }
+.dnd-panel h2 { color: #d4af37; margin-bottom: 2px; }
+.char-class { color: #999; font-size: 0.85em; margin-bottom: 15px; }
+.dnd-panel h3 { color: #d4af37; margin-bottom: 15px; border-bottom: 1px solid #555; padding-bottom: 5px; }
+
+.hp-wrap { margin-bottom: 12px; }
+.hp-label { display: flex; justify-content: space-between; font-size: 0.85em; margin-bottom: 4px; color: #ccc; }
+.hp-bar-bg { width: 100%; height: 14px; background: #111; border-radius: 7px; overflow: hidden; border: 1px solid #555; }
+.hp-bar-fill { height: 100%; background: linear-gradient(90deg, #8b0000, #c0392b); transition: width 0.3s ease; }
+
+.gold-wrap { margin-bottom: 15px; color: #d4af37; font-size: 0.9em; font-weight: bold; }
+
+.stats { display: flex; flex-direction: column; gap: 10px; margin-bottom: 15px; }
 .stat { display: flex; justify-content: space-between; background: #333; padding: 8px; border-radius: 4px; font-weight: bold; }
-.inventory { flex-grow: 1; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+.inventory { flex-grow: 1; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 60px; }
 .item { background: #3a3a3a; padding: 8px; border-left: 4px solid #8b0000; border-radius: 4px; font-size: 0.9em; }
+.item.new-item { border-left-color: #4CAF50; animation: flash 1.5s ease; }
+@keyframes flash { 0% { background: #2d4a2d; } 100% { background: #3a3a3a; } }
 
 .dice-btn { background-color: #8b0000; color: white; border: none; padding: 15px; font-size: 1.1em; font-weight: bold; cursor: pointer; border-radius: 4px; margin-top: 15px; transition: 0.2s; }
 .dice-btn:hover { background-color: #a50000; }
+.dice-btn:disabled { background-color: #555; cursor: not-allowed; }
 
-/* ฝั่งขวา */
+.reset-btn { background-color: #444; color: #ccc; border: 1px solid #666; padding: 10px; font-size: 0.9em; cursor: pointer; border-radius: 4px; margin-top: 10px; transition: 0.2s; }
+.reset-btn:hover { background-color: #555; }
+
 .game-panel { flex-grow: 1; display: flex; flex-direction: column; position: relative; }
 .chat-log { flex-grow: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 
@@ -24,7 +74,15 @@ body { background-color: #1a1a1a; color: #e0e0e0; font-family: 'Courier New', Co
 .message.player { background-color: #1e3a5f; align-self: flex-end; max-width: 80%; border: 1px solid #3b699e; }
 .message.gm { background-color: #333; align-self: flex-start; max-width: 90%; border-left: 4px solid #d4af37; }
 .message.mmo-bot { color: #ff9900; font-size: 0.9em; }
+.message.event { color: #ffcc00; font-size: 0.9em; text-align: center; align-self: center; }
 
 .input-area { display: flex; padding: 15px; background-color: #222; border-top: 3px solid #555; }
 .input-area input { flex-grow: 1; padding: 12px; background: #111; color: white; border: 1px solid #555; border-radius: 4px; font-size: 1em; font-family: inherit; }
+.input-area input:disabled { opacity: 0.5; }
 .input-area button { background-color: #4CAF50; color: white; border: none; padding: 0 25px; margin-left: 10px; cursor: pointer; border-radius: 4px; font-weight: bold; font-size: 1em; }
+
+@media (max-width: 700px) {
+    .container { flex-direction: column; height: 95vh; }
+    .dnd-panel { width: 100%; border-right: none; border-bottom: 3px solid #555; max-height: 40vh; }
+    .class-grid { grid-template-columns: 1fr; }
+}

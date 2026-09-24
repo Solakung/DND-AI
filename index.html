@@ -7,37 +7,106 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="container">
-        <!-- ฝั่งซ้าย: DnD Sheet -->
-        <aside class="dnd-panel">
-            <h2>นักผจญภัย</h2>
-            <div class="stats">
-                <div class="stat"><span>STR (พลัง)</span><span>16</span></div>
-                <div class="stat"><span>DEX (ว่องไว)</span><span>14</span></div>
-                <div class="stat"><span>INT (ฉลาด)</span><span>10</span></div>
-                <div class="stat"><span>CON (อดทน)</span><span>15</span></div>
-            </div>
-            
-            <h3 style="margin-top: 20px;">กระเป๋า (Inventory)</h3>
-            <div class="inventory">
-                <div class="item">⚔️ ดาบเหล็กกล้า (1d8)</div>
-                <div class="item">🧪 โพชั่นฟื้นฟู (x3)</div>
-                <div class="item">🍞 เสบียงแห้ง (x5)</div>
+
+    <!-- ================= หน้าเลือกตัวละคร ================= -->
+    <div id="screen-select" class="screen">
+        <div class="create-box">
+            <h1>เลือกอาชีพของคุณ</h1>
+            <p class="sub">แต่ละอาชีพมีค่าสถานะและไอเทมเริ่มต้นต่างกัน</p>
+            <div id="class-grid" class="class-grid"></div>
+            <button class="custom-btn" onclick="goToCustomScreen()">✏️ กำหนดเอง (Custom)</button>
+        </div>
+    </div>
+
+    <!-- ================= หน้ากำหนดเอง ================= -->
+    <div id="screen-custom" class="screen" style="display:none;">
+        <div class="create-box">
+            <h1>สร้างตัวละครของคุณเอง</h1>
+
+            <label class="field-label">ชื่อตัวละคร</label>
+            <input type="text" id="custom-name" class="text-input" placeholder="เช่น อาร์เธอร์">
+
+            <label class="field-label">ประวัติ/บุคลิกตัวละคร (ให้ AI ใช้แต่งเนื้อเรื่อง)</label>
+            <textarea id="custom-backstory" class="text-area" placeholder="เช่น อดีตทหารรับจ้างที่หนีออกจากสมรภูมิ ตามหาน้องสาวที่หายตัวไป..."></textarea>
+
+            <label class="field-label">แจกแต้มสถานะ (เหลือ <span id="points-left">20</span> แต้ม)</label>
+            <div class="point-buy">
+                <div class="point-row">
+                    <span>STR (พลัง)</span>
+                    <button onclick="adjustStat('str',-1)">-</button>
+                    <span id="val-str">8</span>
+                    <button onclick="adjustStat('str',1)">+</button>
+                </div>
+                <div class="point-row">
+                    <span>DEX (ว่องไว)</span>
+                    <button onclick="adjustStat('dex',-1)">-</button>
+                    <span id="val-dex">8</span>
+                    <button onclick="adjustStat('dex',1)">+</button>
+                </div>
+                <div class="point-row">
+                    <span>INT (ฉลาด)</span>
+                    <button onclick="adjustStat('int',-1)">-</button>
+                    <span id="val-int">8</span>
+                    <button onclick="adjustStat('int',1)">+</button>
+                </div>
+                <div class="point-row">
+                    <span>CON (อดทน)</span>
+                    <button onclick="adjustStat('con',-1)">-</button>
+                    <span id="val-con">8</span>
+                    <button onclick="adjustStat('con',1)">+</button>
+                </div>
             </div>
 
-            <button onclick="rollD20()" class="dice-btn">🎲 ทอยเต๋า D20</button>
-        </aside>
+            <div class="button-row">
+                <button class="back-btn" onclick="goToSelectScreen()">← ย้อนกลับ</button>
+                <button class="start-btn" onclick="startCustomCharacter()">เริ่มเกม →</button>
+            </div>
+        </div>
+    </div>
 
-        <!-- ฝั่งขวา: ช่องแชท MMO -->
-        <main class="game-panel">
-            <div id="chat-log" class="chat-log">
-                <div class="message system">[System]: กำลังเชื่อมต่อเข้าสู่โลก...</div>
-            </div>
-            <div class="input-area">
-                <input type="text" id="action-input" placeholder="พิมพ์การกระทำของคุณ เช่น 'เดินเข้าไปในป่า'..." onkeypress="handleEnter(event)">
-                <button onclick="sendAction()">ส่ง</button>
-            </div>
-        </main>
+    <!-- ================= หน้าเกม ================= -->
+    <div id="screen-game" class="screen" style="display:none;">
+        <div class="container">
+            <!-- ฝั่งซ้าย: DnD Sheet -->
+            <aside class="dnd-panel">
+                <h2 id="char-name">นักผจญภัย</h2>
+                <div class="char-class" id="char-class"></div>
+
+                <div class="hp-wrap">
+                    <div class="hp-label">
+                        <span>HP</span>
+                        <span id="hp-text">20 / 20</span>
+                    </div>
+                    <div class="hp-bar-bg"><div id="hp-bar-fill" class="hp-bar-fill"></div></div>
+                </div>
+
+                <div class="gold-wrap">💰 <span id="gold-text">0</span> Gold</div>
+
+                <div class="stats">
+                    <div class="stat"><span>STR (พลัง)</span><span id="stat-str">16</span></div>
+                    <div class="stat"><span>DEX (ว่องไว)</span><span id="stat-dex">14</span></div>
+                    <div class="stat"><span>INT (ฉลาด)</span><span id="stat-int">10</span></div>
+                    <div class="stat"><span>CON (อดทน)</span><span id="stat-con">15</span></div>
+                </div>
+
+                <h3 style="margin-top: 20px;">กระเป๋า (Inventory)</h3>
+                <div class="inventory" id="inventory-list"></div>
+
+                <button onclick="rollD20()" class="dice-btn">🎲 ทอยเต๋า D20</button>
+                <button onclick="resetGame()" class="reset-btn">🔄 เริ่มเกมใหม่</button>
+            </aside>
+
+            <!-- ฝั่งขวา: ช่องแชท MMO -->
+            <main class="game-panel">
+                <div id="chat-log" class="chat-log">
+                    <div class="message system">[System]: กำลังเชื่อมต่อเข้าสู่โลก...</div>
+                </div>
+                <div class="input-area">
+                    <input type="text" id="action-input" placeholder="พิมพ์การกระทำของคุณ เช่น 'เดินเข้าไปในป่า'..." onkeypress="handleEnter(event)">
+                    <button onclick="sendAction()">ส่ง</button>
+                </div>
+            </main>
+        </div>
     </div>
 
     <script src="app.js"></script>
