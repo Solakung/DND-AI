@@ -33,7 +33,7 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: 'System Error: ไม่พบ API Key ในระบบหลังบ้าน (ตรวจสอบ Environment Variables บน Vercel)' });
     }
 
-    const { history, character } = req.body || {};
+    const { history, character, enemies } = req.body || {};
 
     if (!Array.isArray(history) || history.length === 0) {
         return res.status(400).json({ error: 'ไม่พบข้อมูล history ที่ส่งมา' });
@@ -42,7 +42,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'ไม่พบข้อมูลตัวละคร (character)' });
     }
 
-    const characterSheet = buildCharacterSheetText(character);
+    const characterSheet = buildCharacterSheetText(character, enemies);
 
     const systemPrompt = `คุณคือ Game Master ของเกม MMORPG แนวแฟนตาซีสไตล์ DnD ตอบกลับเป็นภาษาไทยเท่านั้น
 บรรยายเนื้อเรื่องให้กระชับ สนุก สมจริง ทำตัวเหมือน Log ในเกม MMO
@@ -53,7 +53,7 @@ ${characterSheet}
 
 === กฎการเริ่มเกม ===
 ถ้าข้อความล่าสุดจากผู้เล่นคือ "[เริ่มเกม]" ให้บรรยายฉากเปิดเรื่อง แนะนำโลก สถานที่เริ่มต้น และสถานการณ์ตั้งต้นที่เข้ากับอาชีพ/ประวัติของตัวละคร จบด้วยการเชื้อเชิญให้ผู้เล่นตัดสินใจทำอะไรต่อ
-ฉากเปิดเรื่องนี้ห้ามขอให้ทอยเต๋า (roll_request.required ต้องเป็น false) และห้ามมี hp_change/gold_change/add_items/remove_items ใดๆ (ให้เป็นค่าว่าง/0 ทั้งหมด)
+ฉากเปิดเรื่องนี้ห้ามขอให้ทอยเต๋า (roll_request.required ต้องเป็น false) และห้ามมี hp_change/gold_change/add_items/remove_items/enemy_changes ใดๆ (ให้เป็นค่าว่าง/0 ทั้งหมด)
 
 === กฎการทอยเต๋าแบบ DnD (สำคัญมาก) ===
 คุณคือคนตัดสินว่าเมื่อไหร่ต้องทอยเต๋า ไม่ใช่ผู้เล่น ระบบหลังบ้านเป็นคนสุ่มเลขและบวกโบนัสตามค่าสถานะให้เอง (โบนัส = (ค่าสถานะ - 10) หารสองปัดลง) คุณห้ามสุ่มหรือแต่งแต้มเต๋าเอง:
@@ -72,9 +72,20 @@ ${characterSheet}
   - ส่วนต่าง -1 ถึง -4: ล้มเหลวแต่ยังไม่เสียหายหนัก อาจมีผลข้างเคียงเบา
   - ส่วนต่าง -5 ลงไป: พลาดหนัก เสีย HP ได้ (hp_change เป็นลบ)
   - เสมอ: สถานการณ์ตึงเครียด ไม่มีใครได้เปรียบชัดเจน
-- ถ้าผลทอยเป็นเต๋าความเสียหาย/การรักษา (d4-d12): ใช้แต้มที่ทอยได้เป็นปริมาณ hp_change โดยตรง (เช่น d8 ได้ 5 = ประมาณ 5 HP) จะเป็นลบหรือบวกดูตามเนื้อเรื่อง ระบบเก็บ HP ของผู้เล่นเท่านั้น ไม่ได้ติดตาม HP ของศัตรู ให้คุณเล่าสภาพของศัตรูในเนื้อเรื่องเอง
+- ถ้าผลทอยเป็นเต๋าความเสียหาย/การรักษา (d4-d12): ใช้แต้มที่ทอยได้เป็นปริมาณ hp_change โดยตรง (เช่น d8 ได้ 5 = ประมาณ 5 HP) จะเป็นลบหรือบวกดูตามเนื้อเรื่อง hp_change ใช้กับ HP ของผู้เล่นเท่านั้น ส่วนความเสียหายที่ศัตรูได้รับให้ใส่ใน enemy_changes (ดูกฎศัตรูและการต่อสู้)
 - ถ้าเป็น d100 ให้ประเมินตามสัดส่วน: 1-40 ผลแย่, 41-70 ก้ำกึ่ง, 71-100 ผลดี
 - รอบที่ตัดสินผลแล้ว roll_request.required ให้เป็น false เว้นแต่ผลนำไปสู่ขั้นตอนต่อไปทันที (เช่น โจมตีสำเร็จแล้วต้องขอทอยเต๋าความเสียหาย) หรือสถานการณ์เสี่ยงใหม่
+
+=== กฎศัตรูและการต่อสู้ ===
+- ระบบติดตาม HP ของศัตรูให้ สถานะปัจจุบันมีบรรทัด "ศัตรูในฉากตอนนี้" ระบุ HP ล่าสุด ให้ยึดตามนั้นเสมอ
+- เมื่อมีศัตรูใหม่ปรากฏตัว ให้ใส่ใน enemy_changes โดยระบุ name และ max_hp (อ่อน 6-10, ปกติ 12-20, แข็ง 25-40, บอส 50 ขึ้นไป) กับ hp_change = 0 และ remove = false ตั้งชื่อให้เฉพาะเจาะจงและใช้ชื่อเดิมตลอด ถ้ามีหลายตัวให้ชื่อต่างกัน (เช่น ก็อบลิน A, ก็อบลิน B)
+- ศัตรูที่มีอยู่แล้วให้ max_hp = 0 เสมอ ห้ามเพิ่มซ้ำ
+- เมื่อผู้เล่นทำความเสียหายสำเร็จ (จากผลทอยเต๋าความเสียหาย) ให้ใส่ hp_change ของศัตรูนั้นเป็นค่าลบเท่าแต้มเต๋าที่ทอยได้ (ปรับเล็กน้อยตามเนื้อเรื่องได้) ศัตรูจะถูกกำจัดอัตโนมัติเมื่อ HP เหลือ 0 ไม่ต้องตั้ง remove
+- ตั้ง remove = true เฉพาะกรณีศัตรูหนีไปหรือออกจากการต่อสู้โดยไม่ผ่าน HP (เช่น ถูกเกลี้ยกล่อมให้ถอย)
+- ในรอบที่ขอให้ทอยเต๋า ให้เพิ่มศัตรูใหม่ได้ (max_hp > 0, hp_change = 0) แต่ห้ามเปลี่ยน HP ของศัตรูที่มีอยู่
+- ลำดับการต่อสู้ปกติ: ผู้เล่นโจมตี → ทอยแข่งกับศัตรูนั้น → ถ้าชนะให้ขอทอยเต๋าความเสียหายตามอาวุธ/เวท
+- ถ้าศัตรูโจมตีผู้เล่นและผู้เล่นแพ้การป้องกัน ให้กำหนด hp_change ของผู้เล่นเป็นลบตามส่วนต่างและความแรงของศัตรูเลย (ไม่ต้องขอทอยเต๋าอีก)
+- ถ้าไม่มีศัตรูเกี่ยวข้องในรอบนั้น ให้ enemy_changes เป็น array ว่าง
 
 === กฎอื่นๆ ===
 - ปรับ hp_change ให้สมเหตุสมผลกับสถานการณ์ (ทั่วไปไม่เกิน -8 ต่อครั้ง เว้นแต่สถานการณ์อันตรายมาก)
@@ -98,6 +109,20 @@ ${characterSheet}
                     gold_change: { type: "INTEGER", description: "การเปลี่ยนแปลงทอง (ลบ=เสียทอง, บวก=ได้ทอง)" },
                     add_items: { type: "ARRAY", items: ITEM_SCHEMA, description: "ไอเทมที่ได้รับใหม่ พร้อมจำนวน (ถ้าไม่มีให้เป็น array ว่าง)" },
                     remove_items: { type: "ARRAY", items: ITEM_SCHEMA, description: "ไอเทมที่ถูกใช้/เสียไป พร้อมจำนวนที่ใช้จริง (ถ้าไม่มีให้เป็น array ว่าง)" },
+                    enemy_changes: {
+                        type: "ARRAY",
+                        description: "การเปลี่ยนแปลงของศัตรูในฉาก (ปรากฏตัวใหม่ / เสีย HP / หนี) ถ้าไม่มีให้เป็น array ว่าง",
+                        items: {
+                            type: "OBJECT",
+                            properties: {
+                                name: { type: "STRING", description: "ชื่อศัตรู ใช้ชื่อเดิมตลอด" },
+                                max_hp: { type: "INTEGER", description: "HP สูงสุดเมื่อศัตรูปรากฏตัวครั้งแรกเท่านั้น ศัตรูที่มีอยู่แล้วให้เป็น 0" },
+                                hp_change: { type: "INTEGER", description: "ลบ=เสีย HP, บวก=ฟื้นฟู, 0=ไม่เปลี่ยน" },
+                                remove: { type: "BOOLEAN", description: "true เฉพาะเมื่อศัตรูหนี/ออกจากการต่อสู้โดยไม่ผ่าน HP" }
+                            },
+                            required: ["name", "max_hp", "hp_change", "remove"]
+                        }
+                    },
                     status: { type: "STRING", enum: VALID_STATUS },
                     roll_request: {
                         type: "OBJECT",
@@ -114,7 +139,7 @@ ${characterSheet}
                         required: ["required", "die", "reason", "stat", "dc", "opponent_name", "opponent_bonus"]
                     }
                 },
-                required: ["narrative", "hp_change", "gold_change", "add_items", "remove_items", "status", "roll_request"]
+                required: ["narrative", "hp_change", "gold_change", "add_items", "remove_items", "enemy_changes", "status", "roll_request"]
             }
         }
     };
@@ -248,6 +273,16 @@ function normalize(p) {
         return null;
     }).filter(Boolean);
 
+    const enemyChanges = (Array.isArray(p.enemy_changes) ? p.enemy_changes : []).map(x => {
+        if (!x || typeof x.name !== "string" || !x.name.trim()) return null;
+        return {
+            name: x.name.trim().slice(0, 40),
+            max_hp: Math.max(0, Math.min(999, int(x.max_hp))),
+            hp_change: Math.max(-999, Math.min(999, int(x.hp_change))),
+            remove: x.remove === true
+        };
+    }).filter(Boolean);
+
     const rr = p.roll_request && typeof p.roll_request === "object" ? p.roll_request : {};
     const needRoll = rr.required === true;
     const oppName = needRoll && typeof rr.opponent_name === "string" ? rr.opponent_name.trim() : "";
@@ -264,6 +299,7 @@ function normalize(p) {
         gold_change: int(p.gold_change),
         add_items: items(p.add_items),
         remove_items: items(p.remove_items),
+        enemy_changes: enemyChanges,
         status: VALID_STATUS.includes(p.status) ? p.status : "ปกติ",
         roll_request: {
             required: needRoll,
@@ -281,7 +317,7 @@ function summarize(attempts) {
     return attempts.map(a => `${a.model}#${a.attempt}:${a.result}`).join(" → ");
 }
 
-function buildCharacterSheetText(c) {
+function buildCharacterSheetText(c, enemies) {
     const lines = [
         `ชื่อ: ${c.name || "-"}`,
         `อาชีพ: ${c.className || "-"}${c.classDesc ? ` (${c.classDesc})` : ""}`,
@@ -291,5 +327,12 @@ function buildCharacterSheetText(c) {
         `ทอง: ${c.gold}`,
         `กระเป๋า: ${(c.inventory && c.inventory.length) ? c.inventory.join(", ") : "ไม่มีไอเทม"}`
     ];
+    if (c.status && typeof c.status === "string") {
+        lines.push(`สถานะร่างกายล่าสุด: ${c.status.slice(0, 20)}`);
+    }
+    const list = (Array.isArray(enemies) ? enemies : [])
+        .filter(e => e && typeof e.name === "string" && Number.isFinite(Number(e.hp)) && Number.isFinite(Number(e.maxHp)))
+        .slice(0, 10);
+    lines.push(`ศัตรูในฉากตอนนี้: ${list.length ? list.map(e => `${String(e.name).slice(0, 40)} HP ${Number(e.hp)}/${Number(e.maxHp)}`).join(", ") : "ไม่มี"}`);
     return lines.join("\n");
 }

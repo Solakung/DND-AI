@@ -6,6 +6,7 @@ const STAT_MIN = 8;
 const STAT_MAX = 18;
 const KICKOFF_TEXT = "[เริ่มเกม]";
 const PENDING_ROLL_KEY = "solo_mmo_pending_roll_v1";
+const ENEMY_KEY = "solo_mmo_enemies_v1";
 
 const CLASS_PRESETS = [
     {
@@ -42,6 +43,7 @@ const CLASS_PRESETS = [
 let character = null;
 let conversationHistory = [];
 let pendingRoll = null; // { required, die, reason, rolled? } - ตั้งค่าเมื่อ AI ขอให้ทอยเต๋า (rolled = แต้มที่ทอยแล้วแต่ยังส่งไม่สำเร็จ)
+let enemies = []; // [{ name, hp, maxHp }] ศัตรูที่อยู่ในฉากตอนนี้
 let failedRequest = null; // { text, opts } - คำขอปกติ/ฉากเปิดเรื่องที่ส่งไม่สำเร็จ ไว้ให้กดลองใหม่
 
 const chatLog = document.getElementById("chat-log");
@@ -53,6 +55,7 @@ window.onload = () => {
     character = loadCharacter();
     if (character) {
         conversationHistory = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+        enemies = loadEnemies();
         showScreen("game");
         renderCharacterSheet();
         setInputEnabled(false);
@@ -69,7 +72,7 @@ window.onload = () => {
             });
             pendingRoll = loadPendingRoll();
             if (pendingRoll && pendingRoll.required) {
-                addMessage("system", `[System]: 🎲 GM ขอให้คุณทอยเต๋าเพื่อ: ${escapeHtml(pendingRoll.reason || "ตัดสินผลการกระทำ")}${rollHint(pendingRoll)}`);
+                announceRoll(pendingRoll);
                 if (Number.isInteger(pendingRoll.rolled)) {
                     addMessage("system", `[System]: คุณทอยได้ <b>${pendingRoll.rolled}</b> ไปแล้วแต่ยังส่งไม่สำเร็จ กดปุ่มทอยเต๋าเพื่อส่งผลเดิมอีกครั้ง`);
                 }
@@ -181,6 +184,8 @@ function initGame() {
     conversationHistory = [];
     pendingRoll = null;
     savePendingRoll();
+    enemies = [];
+    saveEnemies();
     saveCharacter();
     saveHistory();
     chatLog.innerHTML = "";
@@ -202,9 +207,11 @@ function resetGame() {
     localStorage.removeItem(CHAR_KEY);
     localStorage.removeItem(HISTORY_KEY);
     localStorage.removeItem(PENDING_ROLL_KEY);
+    localStorage.removeItem(ENEMY_KEY);
     character = null;
     conversationHistory = [];
     pendingRoll = null;
+    enemies = [];
     failedRequest = null;
     chatLog.innerHTML = "";
     showScreen("select");
@@ -213,7 +220,7 @@ function resetGame() {
 // ========================= Render ชีทตัวละคร =========================
 function renderCharacterSheet() {
     document.getElementById("char-name").textContent = character.name;
-    document.getElementById("char-class").textContent = character.className;
+    document.getElementById("char-class").textContent = character.className + (character.status ? ` · สถานะ: ${character.status}` : "");
 
     document.getElementById("stat-str").textContent = character.stats.str;
     document.getElementById("stat-dex").textContent = character.stats.dex;
@@ -230,6 +237,8 @@ function renderCharacterSheet() {
     invEl.innerHTML = character.inventory.length
         ? character.inventory.map(item => `<div class="item">${item}</div>`).join("")
         : `<div class="item" style="opacity:0.5;">(ไม่มีไอเทม)</div>`;
+
+    renderEnemyPanel();
 }
 
 function saveCharacter() { localStorage.setItem(CHAR_KEY, JSON.stringify(character)); }
@@ -238,6 +247,14 @@ function saveHistory() { localStorage.setItem(HISTORY_KEY, JSON.stringify(conver
 function savePendingRoll() {
     if (pendingRoll) localStorage.setItem(PENDING_ROLL_KEY, JSON.stringify(pendingRoll));
     else localStorage.removeItem(PENDING_ROLL_KEY);
+}
+function saveEnemies() { localStorage.setItem(ENEMY_KEY, JSON.stringify(enemies)); }
+function loadEnemies() {
+    try {
+        const raw = localStorage.getItem(ENEMY_KEY);
+        const list = raw ? JSON.parse(raw) : [];
+        return Array.isArray(list) ? list : [];
+    } catch { return []; }
 }
 function loadPendingRoll() { const raw = localStorage.getItem(PENDING_ROLL_KEY); return raw ? JSON.parse(raw) : null; }
 
@@ -416,6 +433,129 @@ function addToInventory(entry) {
     return `➕ ได้รับไอเทม: ${entry.name}${entry.quantity > 1 ? ` x${entry.quantity}` : ""}`;
 }
 
+// ---------- แต้มเต๋าที่ต้องการ ----------
+// แสดงให้ผู้เล่นรู้ก่อนทอยว่าต้องได้กี่แต้ม (DC หรือแต้มที่ต้องชนะศัตรู)
+function rollRequirement(pr) {
+    if (!pr) return "";
+    const die = pr.die || "d20";
+    const sides = getDieSides(die);
+    const statKey = (die === "d20" && STAT_LABEL[pr.stat]) ? pr.stat : null;
+    const mod = statKey ? statMod(statKey) : 0;
+    const modNote = statKey ? ` [โบนัส ${STAT_LABEL[statKey]} ${signed(mod)} รวมให้แล้ว]` : "";
+    const chance = (need) => need <= 1 ? 100 : need > sides ? 0 : Math.round(((sides - need + 1) / sides) * 100);
+    const describe = (need, goal) => {
+        if (need > sides) return `ต้องได้ ${need} แต่ ${die} สูงสุดแค่ ${sides} → เป็นไปไม่ได้`;
+        if (need <= 1) return `ทอยได้เท่าไหร่ก็${goal}`;
+        return `ต้องทอย ${die} ให้ได้ <b>${need}</b> ขึ้นไปจึงจะ${goal} (โอกาส ~${chance(need)}%)`;
+    };
+
+    if (pr.opponent_name && Number.isInteger(pr.oppRolled)) {
+        const oppBonus = Number(pr.opponent_bonus) || 0;
+        const oppTotal = pr.oppRolled + oppBonus;
+        const needWin = oppTotal - mod + 1;
+        const needTie = oppTotal - mod;
+        const tieNote = (needTie >= 1 && needTie <= sides) ? ` (ได้ ${needTie} พอดี = เสมอ)` : "";
+        return `🎯 ${escapeHtml(pr.opponent_name)} ทอยได้ ${pr.oppRolled}${oppBonus ? ` ${signed(oppBonus)}` : ""} = <b>${oppTotal}</b> → ${describe(needWin, "ชนะ")}${modNote}${tieNote}`;
+    }
+
+    const dc = Number(pr.dc) || 0;
+    if (dc > 0) return `🎯 DC ${dc} → ${describe(dc - mod, "สำเร็จ")}${modNote}`;
+    return "";
+}
+
+// ประกาศว่า GM ขอให้ทอย พร้อมบอกแต้มที่ต้องการ (ศัตรูทอยก่อนและเปิดเผยแต้มตรงนี้)
+function announceRoll(pr) {
+    if (!pr) return;
+    if (pr.opponent_name && !Number.isInteger(pr.oppRolled)) {
+        pr.oppRolled = rollSides(getDieSides(pr.die || "d20"));
+        savePendingRoll();
+    }
+    addMessage("system", `[System]: 🎲 GM ขอให้คุณทอยเต๋าเพื่อ: ${escapeHtml(pr.reason || "ตัดสินผลการกระทำ")}${rollHint(pr)}`);
+    const req = rollRequirement(pr);
+    if (req) addMessage("system", `[System]: ${req}`);
+}
+
+// ---------- ศัตรู ----------
+function findEnemyIndex(name) {
+    const key = itemKey(name);
+    if (!key) return -1;
+    const exact = enemies.findIndex(e => itemKey(e.name) === key);
+    if (exact !== -1) return exact;
+    return enemies.findIndex(e => {
+        const k = itemKey(e.name);
+        return k && (k.includes(key) || key.includes(k));
+    });
+}
+
+function applyEnemyChanges(changes, events) {
+    changes.forEach(c => {
+        if (!c || typeof c.name !== "string" || !c.name.trim()) return;
+        const name = c.name.trim();
+        const safeName = escapeHtml(name);
+        let idx = findEnemyIndex(name);
+
+        if (idx === -1) {
+            const maxHp = Math.trunc(Number(c.max_hp));
+            if (!(maxHp > 0)) return; // ไม่รู้จักและไม่ได้ประกาศตัวใหม่ → ข้าม
+            enemies.push({ name, hp: Math.min(maxHp, 999), maxHp: Math.min(maxHp, 999) });
+            idx = enemies.length - 1;
+            events.push(`👹 พบศัตรู: ${safeName} (HP ${enemies[idx].hp}/${enemies[idx].maxHp})`);
+        }
+
+        const e = enemies[idx];
+        const delta = Math.trunc(Number(c.hp_change)) || 0;
+        if (delta !== 0) {
+            e.hp = Math.max(0, Math.min(e.maxHp, e.hp + delta));
+            events.push(delta < 0
+                ? `⚔️ ${safeName} เสีย ${Math.abs(delta)} HP (เหลือ ${e.hp}/${e.maxHp})`
+                : `💚 ${safeName} ฟื้นฟู ${delta} HP (${e.hp}/${e.maxHp})`);
+        }
+
+        if (e.hp <= 0) {
+            enemies.splice(idx, 1);
+            events.push(`💀 ${safeName} ถูกกำจัดแล้ว`);
+        } else if (c.remove === true) {
+            enemies.splice(idx, 1);
+            events.push(`🏃 ${safeName} ออกจากการต่อสู้`);
+        }
+    });
+    saveEnemies();
+}
+
+// รายงานสถานะสั้นๆ หลัง GM ตอบทุกครั้งที่มีศัตรูอยู่ในฉาก
+function statusReport() {
+    if (!enemies.length) return "";
+    const me = `คุณ ${character.hp}/${character.maxHp} HP${character.status && character.status !== "ปกติ" ? ` (${escapeHtml(character.status)})` : ""}`;
+    const foes = enemies.map(e => `${escapeHtml(e.name)} ${e.hp}/${e.maxHp}`).join(" | ");
+    return `📋 สถานะ: ${me} | ${foes}`;
+}
+
+function renderEnemyPanel() {
+    let panel = document.getElementById("enemy-panel");
+    if (!panel) {
+        const anchor = document.querySelector(".gold-wrap");
+        if (!anchor) return;
+        panel = document.createElement("div");
+        panel.id = "enemy-panel";
+        anchor.insertAdjacentElement("afterend", panel);
+    }
+    if (!enemies.length) {
+        panel.style.display = "none";
+        panel.innerHTML = "";
+        return;
+    }
+    panel.style.cssText = "display:block;margin-bottom:15px;padding:10px;background:#2a1a2a;border:1px solid #6b3a6b;border-radius:6px;";
+    panel.innerHTML = `<div style="color:#d4af37;font-size:0.9em;font-weight:bold;margin-bottom:8px;">⚔️ ศัตรูในฉาก</div>` +
+        enemies.map(e => {
+            const pct = Math.max(0, Math.min(100, (e.hp / e.maxHp) * 100));
+            return `<div style="margin-bottom:8px;">` +
+                `<div style="display:flex;justify-content:space-between;gap:8px;font-size:0.85em;color:#ccc;margin-bottom:3px;">` +
+                `<span style="overflow-wrap:anywhere;">${escapeHtml(e.name)}</span><span>${e.hp} / ${e.maxHp}</span></div>` +
+                `<div style="height:8px;background:#111;border:1px solid #555;border-radius:4px;overflow:hidden;">` +
+                `<div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#4a1a6b,#8e44ad);"></div></div></div>`;
+        }).join("");
+}
+
 function handleEnter(event) {
     if (event.key === "Enter") sendAction();
 }
@@ -460,7 +600,7 @@ async function callServer(playerText, opts = {}) {
         const response = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ history: conversationHistory, character })
+            body: JSON.stringify({ history: conversationHistory, character, enemies })
         });
 
         try { data = await response.json(); } catch { data = null; } // เช่น Vercel timeout ตอบเป็น HTML/ข้อความ
@@ -500,7 +640,7 @@ async function callServer(playerText, opts = {}) {
     // ตั้งค่า pendingRoll ตามที่ AI ขอมา (ของเก่าที่ทอยแล้วถูกแทนที่/ล้างตรงนี้)
     if (data.roll_request && data.roll_request.required) {
         pendingRoll = data.roll_request;
-        addMessage("system", `[System]: 🎲 GM ขอให้คุณทอยเต๋าเพื่อ: ${escapeHtml(pendingRoll.reason || "ตัดสินผลการกระทำ")}${rollHint(pendingRoll)}`);
+        announceRoll(pendingRoll);
     } else {
         pendingRoll = null;
     }
@@ -580,9 +720,20 @@ function applyStateChanges(data) {
         });
     }
 
+    if (typeof data.status === "string" && data.status) {
+        character.status = data.status;
+    }
+
+    if (Array.isArray(data.enemy_changes)) {
+        applyEnemyChanges(data.enemy_changes, events);
+    }
+
     if (events.length > 0) {
         addMessage("event", events.join(" | "));
     }
+
+    const report = statusReport();
+    if (report) addMessage("event", report);
 
     if (character.hp <= 0) {
         const statusText = data.status === "เสียชีวิต" ? "คุณเสียชีวิตแล้ว 💀" : "คุณหมดสติ...";
