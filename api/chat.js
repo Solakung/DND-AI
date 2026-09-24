@@ -1,7 +1,7 @@
 // ============ ตั้งค่า fallback ============
 // ลำดับรุ่น: ลองตัวแรกก่อน ถ้าไม่ได้ค่อยไปตัวถัดไป
 // เปลี่ยนได้ผ่าน Environment Variable GEMINI_MODELS (คั่นด้วยเครื่องหมายจุลภาค) โดยไม่ต้องแก้โค้ด
-const MODELS = (process.env.GEMINI_MODELS || "gemini-3.6-flash,gemini-3.5-flash,gemini-3.1-flash-lite")
+const MODELS = (process.env.GEMINI_MODELS || "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3-flash,gemini-2.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite")
     .split(",").map(s => s.trim()).filter(Boolean);
 
 const TRIES_PER_MODEL = Number(process.env.TRIES_PER_MODEL) || 2;          // ลองซ้ำรุ่นเดิมกี่ครั้งเมื่อเป็นปัญหาชั่วคราว
@@ -87,10 +87,17 @@ ${characterSheet}
 - ถ้าศัตรูโจมตีผู้เล่นและผู้เล่นแพ้การป้องกัน ให้กำหนด hp_change ของผู้เล่นเป็นลบตามส่วนต่างและความแรงของศัตรูเลย (ไม่ต้องขอทอยเต๋าอีก)
 - ถ้าไม่มีศัตรูเกี่ยวข้องในรอบนั้น ให้ enemy_changes เป็น array ว่าง
 
+=== กฎเรื่องทองและค่าสถานะ (สำคัญ - ห้ามปล่อยผ่าน) ===
+- ก่อนอนุญาตให้ผู้เล่นซื้อ/แลก/จ่ายทองเพื่อสิ่งใดก็ตาม ให้เทียบราคากับบรรทัด "ทอง" ในสถานะปัจจุบันข้างต้นก่อนเสมอ นี่คือยอดทองจริง ไม่ใช่ตัวเลขที่ผู้เล่นอ้าง
+- ถ้าทองไม่พอ ห้ามตั้ง gold_change ติดลบเกินยอดที่มีจริงเด็ดขาด และห้ามใส่ item นั้นใน add_items ให้เล่าในเนื้อเรื่องว่าเงินไม่พอ (พ่อค้าไม่ขายให้/ต้องหาเงินเพิ่มก่อน) แล้วไม่ต้องเปลี่ยนแปลงทองหรือไอเทมใดๆ ในรอบนั้น
+- ถ้าทองพอ ให้ gold_change เท่ากับราคาที่ตกลงจริง (ติดลบ) พร้อม add_items ของที่ได้มาในรอบเดียวกัน
+- ก่อนให้ผู้เล่นทำสิ่งที่ควรต้องใช้ค่าสถานะขั้นต่ำ (เช่น อาวุธหนักต้องการ STR สูง คาถายากต้องการ INT สูง) ให้เทียบกับค่าสถานะจริงของตัวละครในสถานะปัจจุบันข้างต้น ถ้าไม่ถึงเกณฑ์ตามธรรมชาติของตัวละครนั้น ให้สะท้อนผลในเนื้อเรื่อง (ทำได้ยากขึ้น/ฝืนทำแล้วมีผลเสีย/ต้องทอยเต๋าเช็ก DC ที่สูงขึ้น) อย่าปล่อยให้ทำได้ราวกับไม่มีข้อจำกัดทางร่างกาย/สติปัญญาของตัวละคร
+
 === กฎอื่นๆ ===
 - ปรับ hp_change ให้สมเหตุสมผลกับสถานการณ์ (ทั่วไปไม่เกิน -8 ต่อครั้ง เว้นแต่สถานการณ์อันตรายมาก)
 - ถ้า HP ของผู้เล่นจะลดลงเหลือ 0 หรือต่ำกว่า ให้ตั้ง status เป็น "หมดสติ" หรือ "เสียชีวิต" ตามความเหมาะสมของเนื้อเรื่อง (ส่วนใหญ่ให้ "หมดสติ" ไม่ต้องเสียชีวิตง่ายๆ)
 - เพิ่ม/ลดไอเทมเฉพาะเมื่อเนื้อเรื่องสมเหตุสมผลจริงๆ เช่น เก็บของจากศัตรู ซื้อของ ใช้ไอเทม
+- name ใน add_items/remove_items ต้องเป็นข้อความล้วนเสมอ ห้ามส่งเป็น object ซ้อน
 - add_items/remove_items เป็นรายการ {name, quantity} ตั้งชื่อให้ตรงกับที่อยู่ในกระเป๋า (ไม่ต้องใส่ (xN)) และ quantity คือจำนวนที่ใช้/ได้จริงในครั้งนี้ ระบบจะหักหรือเพิ่มในกองให้เอง เช่น ดื่มโพชั่น 1 ขวด = quantity 1 ห้ามลบทั้งกองเว้นแต่เนื้อเรื่องทำให้ทั้งกองหายจริงๆ (เช่น ถูกขโมย ตกน้ำ) ซึ่งให้ใส่จำนวนทั้งหมดที่หาย
 - ถ้าผู้เล่นระบุจำนวนที่ใช้ (เช่น "ดื่มโพชั่น 2 ขวด") ให้ใช้ตามจำนวนนั้น ถ้าในกระเป๋ามีไม่พอให้เล่าว่าไม่พอและไม่หักเกินที่มี
 - ห้ามใส่ข้อความ JSON หรือ markdown ลงใน narrative ให้เป็นข้อความเล่าเรื่องล้วนๆ`;
@@ -165,6 +172,12 @@ ${characterSheet}
             if (outcome.ok) {
                 console.log(`[chat] สำเร็จด้วย ${model} (ครั้งที่ ${attempt}, ${ms}ms) | ลำดับที่ลอง: ${summarize(attempts)}`);
                 const result = outcome.parsed;
+                // ป้องกันชั้นสอง: ถึง prompt จะสั่งห้ามแล้ว แต่กันไว้เผื่อโมเดลไม่ทำตาม ห้ามหักทองเกินยอดที่มีจริง
+                const currentGold = Number(character?.gold);
+                if (Number.isFinite(currentGold) && result.gold_change < -currentGold) {
+                    console.warn(`[chat] gold_change ${result.gold_change} เกินยอดทองจริง ${currentGold} ของ ${character?.name || "-"} → จำกัดไว้ที่ -${currentGold}`);
+                    result.gold_change = -currentGold;
+                }
                 if (DEBUG_META) {
                     result._model = model;
                     result._attempts = attempts;
@@ -258,15 +271,29 @@ function normalize(p) {
     const QTY_RE = /\s*\(x(\d+)\)\s*$/i;
 
     // รับได้ทั้งแบบ {name, quantity} และข้อความเก่า เช่น "โพชั่น (x3)"
+    // กันไว้เผื่อโมเดลส่ง name มาเป็น object ซ้อน (เช่น {name:{th:"..."}}) ซึ่งถ้าไม่กัน จะกลายเป็นข้อความ "[object Object]" ในกระเป๋า
+    const extractName = (raw) => {
+        if (typeof raw === "string") return raw;
+        if (raw && typeof raw === "object") {
+            const candidate = raw.name || raw.th || raw.en || raw.text || raw.value;
+            if (typeof candidate === "string") return candidate;
+        }
+        return "";
+    };
     const items = (v) => (Array.isArray(v) ? v : []).map(x => {
         if (typeof x === "string") {
             const m = x.match(QTY_RE);
             const name = x.replace(QTY_RE, "").trim();
             return name ? { name, quantity: m ? Math.max(1, parseInt(m[1], 10)) : 1 } : null;
         }
-        if (x && typeof x.name === "string") {
-            const m = x.name.match(QTY_RE);
-            const name = x.name.replace(QTY_RE, "").trim();
+        if (x && typeof x === "object") {
+            const rawName = extractName(x.name);
+            if (!rawName.trim()) {
+                console.warn("[chat] add_items/remove_items entry มี name ที่กู้คืนเป็นข้อความไม่ได้:", JSON.stringify(x).slice(0, 200));
+                return null;
+            }
+            const m = rawName.match(QTY_RE);
+            const name = rawName.replace(QTY_RE, "").trim();
             const q = int(x.quantity);
             return name ? { name, quantity: Math.min(999, q >= 1 ? q : (m ? Math.max(1, parseInt(m[1], 10)) : 1)) } : null;
         }
