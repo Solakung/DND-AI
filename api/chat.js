@@ -1,13 +1,6 @@
 // ============ ตั้งค่า fallback ============
-// ลำดับรุ่น: ลองตัวแรกก่อน ถ้าไม่ได้ค่อยไปตัวถัดไป
-// เปลี่ยนได้ผ่าน Environment Variable GEMINI_MODELS (คั่นด้วยเครื่องหมายจุลภาค) โดยไม่ต้องแก้โค้ด
-const MODELS = (process.env.GEMINI_MODELS || "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3-flash,gemini-2.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite")
-    .split(",").map(s => s.trim()).filter(Boolean);
-
-const TRIES_PER_MODEL = Number(process.env.TRIES_PER_MODEL) || 2;          // ลองซ้ำรุ่นเดิมกี่ครั้งเมื่อเป็นปัญหาชั่วคราว
-const PER_TRY_TIMEOUT_MS = Number(process.env.PER_TRY_TIMEOUT_MS) || 20000; // เวลารอสูงสุดต่อ 1 ครั้ง
-const TIME_BUDGET_MS = Number(process.env.TIME_BUDGET_MS) || 45000;         // เวลารวมสูงสุดก่อนยอมแพ้ (ต้องน้อยกว่า maxDuration ของ Vercel)
-const DEBUG_META = process.env.DEBUG_META === "1";                          // ถ้า "1" จะแนบ _model / _attempts กลับไปใน response
+// ลำดับรุ่น/retry/timeout ย้ายไปอยู่ใน _lib/gemini.js เพื่อให้ summarize.js เรียกใช้ logic เดียวกันได้
+import { runWithFallback, DEBUG_META, summarizeAttempts } from './_lib/gemini.js';
 
 const VALID_STATUS = ["ปกติ", "บาดเจ็บสาหัส", "หมดสติ", "เสียชีวิต"];
 const VALID_DICE = ["d4", "d6", "d8", "d10", "d12", "d20", "d100"];
@@ -20,7 +13,6 @@ const ITEM_SCHEMA = {
     },
     required: ["name", "quantity"]
 };
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 export default async function handler(req, res) {
     if (req.method !== 'POST') {
@@ -33,7 +25,7 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: 'System Error: ไม่พบ API Key ในระบบหลังบ้าน (ตรวจสอบ Environment Variables บน Vercel)' });
     }
 
-    const { history, character, enemies } = req.body || {};
+    const { history, character, enemies, summary } = req.body || {};
 
     if (!Array.isArray(history) || history.length === 0) {
         return res.status(400).json({ error: 'ไม่พบข้อมูล history ที่ส่งมา' });
@@ -42,11 +34,38 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'ไม่พบข้อมูลตัวละคร (character)' });
     }
 
+    // ความจำระยะยาว: สรุปย่อเหตุการณ์เก่าที่ฝั่ง client ทำไว้ล่วงหน้าผ่าน /api/summarize
+    // (เก็บแยกจาก history ที่ถูก trim ด้านล่าง เพื่อให้ยังอ้างอิงเหตุการณ์เก่าได้แม้คุยมานานมากแล้ว)
+    const longTermSummary = typeof summary === "string" ? summary.trim().slice(0, 4000) : "";
+
+    // ============ จำกัดความยาว history ที่ส่งไปให้โมเดล ============
+    // ไม่ตัดของฝั่ง client (ยังเก็บเต็มไว้โหลดต่อได้) แต่ตัดเฉพาะก้อนที่ยิงเข้า Gemini
+    // เพื่อไม่ให้ input token (และค่าใช้จ่าย) โตขึ้นเรื่อยๆ ตามความยาวเซสชัน
+    // สถานะสำคัญ (HP/ทอง/ไอเทม/ศัตรู) ถูกแนบไปกับทุก request อยู่แล้วผ่าน characterSheet
+    // ด้านล่าง โมเดลจึงไม่จำเป็นต้องเห็น history ทั้งหมดเพื่อรู้สถานะปัจจุบัน
+    const MAX_HISTORY_MESSAGES = Number(process.env.MAX_HISTORY_MESSAGES) || 30; // ~15 รอบสนทนาล่าสุด
+    let apiHistory = history;
+    let historyWasTrimmed = false;
+    if (history.length > MAX_HISTORY_MESSAGES) {
+        let sliced = history.slice(-MAX_HISTORY_MESSAGES);
+        if (sliced[0]?.role === "model") sliced = sliced.slice(1); // ให้ contents เริ่มด้วยข้อความผู้เล่นเสมอ
+        apiHistory = sliced;
+        historyWasTrimmed = true;
+        console.log(`[chat] ตัด history จาก ${history.length} เหลือ ${apiHistory.length} ข้อความก่อนส่งให้โมเดล (ประหยัด token)`);
+    }
+
     const characterSheet = buildCharacterSheetText(character, enemies);
 
     const systemPrompt = `คุณคือ Game Master ของเกม MMORPG แนวแฟนตาซีสไตล์ DnD ตอบกลับเป็นภาษาไทยเท่านั้น
 บรรยายเนื้อเรื่องให้กระชับ สนุก สมจริง ทำตัวเหมือน Log ในเกม MMO
-ห้ามให้เนื้อเรื่องซ้ำเดิม สร้างสถานการณ์ใหม่ทุกครั้งตามบริบทของผู้เล่นและประวัติตัวละคร
+ห้ามให้เนื้อเรื่องซ้ำเดิม สร้างสถานการณ์ใหม่ทุกครั้งตามบริบทของผู้เล่นและประวัติตัวละคร${longTermSummary ? `
+
+=== ความทรงจำระยะยาว (สรุปเหตุการณ์เก่าที่ไม่ปรากฏในบทสนทนาด้านล่างแล้ว) ===
+${longTermSummary}
+ให้ยึดข้อมูลนี้เป็นความจริงเกี่ยวกับสิ่งที่เคยเกิดขึ้นมาก่อน (NPC ที่เคยเจอ, ภารกิจ/คำสัญญาที่ค้างอยู่, ความสัมพันธ์, จุดพลิกเนื้อเรื่องสำคัญ) และผูกเนื้อเรื่องปัจจุบันให้ต่อเนื่องสอดคล้องกับสิ่งเหล่านี้ ห้ามขัดแย้งหรือมองข้ามรายละเอียดในสรุปนี้` : ""}${historyWasTrimmed ? `
+
+=== หมายเหตุเรื่องความจำระยะสั้น ===
+บทสนทนาด้านล่างเป็นเพียงส่วนล่าสุดของการผจญภัยเท่านั้น (ข้อความที่เก่ากว่านี้ถูกตัดออกเพื่อประหยัดทรัพยากร ไม่ใช่ว่าไม่เคยเกิดขึ้น${longTermSummary ? " และมีสรุปไว้ในความทรงจำระยะยาวด้านบนแล้ว" : ""}) ให้ยึดข้อมูลในสถานะตัวละคร/ไอเทม/ศัตรูด้านล่างเป็นความจริงเสมอ ห้ามอ้างอิงหรือแต่งเติมรายละเอียดเหตุการณ์เก่าที่ไม่ปรากฏในบทสนทนานี้${longTermSummary ? "หรือในสรุปความทรงจำระยะยาว" : ""} ให้ดำเนินเรื่องต่อจากจุดล่าสุดตามธรรมชาติ` : ""}
 
 นี่คือสถานะปัจจุบันของตัวละครผู้เล่น (ใช้ประกอบการตัดสินใจ และใช้บุคลิก/ประวัติเพื่อแต่งเนื้อเรื่องให้เข้ากับตัวละคร):
 ${characterSheet}
@@ -104,7 +123,7 @@ ${characterSheet}
 
     const payload = {
         systemInstruction: { parts: [{ text: systemPrompt }] },
-        contents: history,
+        contents: apiHistory,
         generationConfig: {
             responseMimeType: "application/json",
             responseSchema: {
@@ -151,118 +170,40 @@ ${characterSheet}
         }
     };
 
-    // ============ วนลองทีละรุ่น ============
-    const attempts = [];          // บันทึกทุกครั้งที่ลอง ไว้ตรวจสอบย้อนหลัง
-    const startedAt = Date.now();
-    let fatalMessage = null;
-
-    outer:
-    for (const model of MODELS) {
-        for (let attempt = 1; attempt <= TRIES_PER_MODEL; attempt++) {
-            if (Date.now() - startedAt > TIME_BUDGET_MS) {
-                attempts.push({ model, attempt, result: "หมดเวลารวม (TIME_BUDGET)", ms: 0 });
-                break outer;
-            }
-
-            const t0 = Date.now();
-            const outcome = await tryModel(model, payload, apiKey);
-            const ms = Date.now() - t0;
-            attempts.push({ model, attempt, status: outcome.status, result: outcome.ok ? "ok" : outcome.reason, ms });
-
-            if (outcome.ok) {
-                console.log(`[chat] สำเร็จด้วย ${model} (ครั้งที่ ${attempt}, ${ms}ms) | ลำดับที่ลอง: ${summarize(attempts)}`);
-                const result = outcome.parsed;
-                // ป้องกันชั้นสอง: ถึง prompt จะสั่งห้ามแล้ว แต่กันไว้เผื่อโมเดลไม่ทำตาม ห้ามหักทองเกินยอดที่มีจริง
-                const currentGold = Number(character?.gold);
-                if (Number.isFinite(currentGold) && result.gold_change < -currentGold) {
-                    console.warn(`[chat] gold_change ${result.gold_change} เกินยอดทองจริง ${currentGold} ของ ${character?.name || "-"} → จำกัดไว้ที่ -${currentGold}`);
-                    result.gold_change = -currentGold;
-                }
-                if (DEBUG_META) {
-                    result._model = model;
-                    result._attempts = attempts;
-                }
-                return res.status(200).json(result);
-            }
-
-            console.warn(`[chat] ล้มเหลว ${model} ครั้งที่ ${attempt}: ${outcome.reason} (${ms}ms)`);
-
-            if (outcome.fatal) {          // เช่น API key ผิด ลองรุ่นอื่นก็ไม่ช่วย
-                fatalMessage = outcome.reason;
-                break outer;
-            }
-            if (!outcome.retrySame) break; // ข้ามไปรุ่นถัดไปทันที
-            await sleep(600 * attempt);    // รอสักครู่แล้วลองรุ่นเดิมอีกรอบ
+    // ============ วนลองทีละรุ่น (logic กลางอยู่ใน _lib/gemini.js) ============
+    function validateChatResponse(parsedJson) {
+        if (!parsedJson || typeof parsedJson.narrative !== "string" || !parsedJson.narrative.trim()) {
+            return { ok: false, reason: "ไม่มี narrative" };
         }
+        return { ok: true, parsed: normalize(parsedJson) };
     }
 
-    const summary = summarize(attempts);
-    console.error(`[chat] ทุกรุ่นล้มเหลว | ${summary}`);
+    const result = await runWithFallback(payload, apiKey, validateChatResponse);
+
+    if (result.ok) {
+        console.log(`[chat] สำเร็จด้วย ${result.model} | ลำดับที่ลอง: ${summarizeAttempts(result.attempts)}`);
+        const parsed = result.parsed;
+        // ป้องกันชั้นสอง: ถึง prompt จะสั่งห้ามแล้ว แต่กันไว้เผื่อโมเดลไม่ทำตาม ห้ามหักทองเกินยอดที่มีจริง
+        const currentGold = Number(character?.gold);
+        if (Number.isFinite(currentGold) && parsed.gold_change < -currentGold) {
+            console.warn(`[chat] gold_change ${parsed.gold_change} เกินยอดทองจริง ${currentGold} ของ ${character?.name || "-"} → จำกัดไว้ที่ -${currentGold}`);
+            parsed.gold_change = -currentGold;
+        }
+        if (DEBUG_META) {
+            parsed._model = result.model;
+            parsed._attempts = result.attempts;
+            parsed._historyTrimmed = historyWasTrimmed ? { from: history.length, to: apiHistory.length } : null;
+        }
+        return res.status(200).json(parsed);
+    }
+
+    const attemptsSummary = summarizeAttempts(result.attempts);
+    console.error(`[chat] ทุกรุ่นล้มเหลว | ${attemptsSummary}`);
     return res.status(503).json({
-        error: fatalMessage
-            ? `Gemini ปฏิเสธคำขอ: ${fatalMessage}`
-            : `ทุกโมเดลไม่ตอบสนองในตอนนี้ ลองใหม่อีกครั้งในไม่กี่วินาที (รายละเอียด: ${summary})`
+        error: result.fatalMessage
+            ? `Gemini ปฏิเสธคำขอ: ${result.fatalMessage}`
+            : `ทุกโมเดลไม่ตอบสนองในตอนนี้ ลองใหม่อีกครั้งในไม่กี่วินาที (รายละเอียด: ${attemptsSummary})`
     });
-}
-
-// เรียก 1 รุ่น 1 ครั้ง แล้วจัดประเภทผลลัพธ์ให้ลูปข้างบนตัดสินใจ
-async function tryModel(model, payload, apiKey) {
-    let response;
-    try {
-        response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }, // ส่ง key ทาง header ไม่ให้หลุดลง log ผ่าน URL
-                body: JSON.stringify(payload),
-                signal: AbortSignal.timeout(PER_TRY_TIMEOUT_MS)
-            }
-        );
-    } catch (e) {
-        const timedOut = e?.name === "TimeoutError" || e?.name === "AbortError";
-        return { ok: false, retrySame: true, reason: timedOut ? "timeout" : `network: ${e.message}` };
-    }
-
-    let data;
-    try {
-        data = await response.json();
-    } catch {
-        return { ok: false, status: response.status, retrySame: response.status >= 500, reason: `HTTP ${response.status} (อ่าน body ไม่ได้)` };
-    }
-
-    if (!response.ok || data.error) {
-        const status = response.status;
-        const msg = data.error?.message || JSON.stringify(data).slice(0, 200);
-        if (status === 401 || status === 403) {
-            return { ok: false, status, fatal: true, reason: `HTTP ${status}: ${msg}` };
-        }
-        // 500/503/504 = ฝั่ง Google โอเวอร์โหลดชั่วคราว → ลองรุ่นเดิมซ้ำ
-        // 429 (โควตา) / 404 (รุ่นถูกถอด) / 400 อื่นๆ → ข้ามไปรุ่นถัดไป
-        const retrySame = status === 500 || status === 503 || status === 504;
-        return { ok: false, status, retrySame, reason: `HTTP ${status}: ${msg}` };
-    }
-
-    // รวมเฉพาะส่วนที่เป็นคำตอบจริง (ตัดส่วน thought ของโมเดลที่คิดก่อนตอบ)
-    const parts = data.candidates?.[0]?.content?.parts || [];
-    const rawText = parts.filter(p => p.text && !p.thought).map(p => p.text).join("");
-
-    if (!rawText) {
-        const block = data.promptFeedback?.blockReason || data.candidates?.[0]?.finishReason || "ไม่ทราบสาเหตุ";
-        return { ok: false, status: 200, retrySame: false, reason: `คำตอบว่าง/ถูกบล็อก (${block})` };
-    }
-
-    let parsed;
-    try {
-        parsed = JSON.parse(rawText);
-    } catch {
-        return { ok: false, status: 200, retrySame: true, reason: "JSON ไม่ถูกต้อง" };
-    }
-
-    if (!parsed || typeof parsed.narrative !== "string" || !parsed.narrative.trim()) {
-        return { ok: false, status: 200, retrySame: true, reason: "ไม่มี narrative" };
-    }
-
-    return { ok: true, status: 200, parsed: normalize(parsed) };
 }
 
 // กันค่าเพี้ยนจากรุ่นเล็ก เช่น hp_change เป็นข้อความ, items ไม่ใช่ array
@@ -338,10 +279,6 @@ function normalize(p) {
             opponent_bonus: contest ? Math.max(-5, Math.min(10, int(rr.opponent_bonus))) : 0
         }
     };
-}
-
-function summarize(attempts) {
-    return attempts.map(a => `${a.model}#${a.attempt}:${a.result}`).join(" → ");
 }
 
 function buildCharacterSheetText(c, enemies) {

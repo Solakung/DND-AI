@@ -7,6 +7,9 @@ const STAT_MAX = 18;
 const KICKOFF_TEXT = "[เริ่มเกม]";
 const PENDING_ROLL_KEY = "solo_mmo_pending_roll_v1";
 const ENEMY_KEY = "solo_mmo_enemies_v1";
+const SUMMARY_KEY = "solo_mmo_summary_v1";
+const SUMMARIZE_CHUNK_SIZE = 20;   // จำนวนข้อความ (ผู้เล่น+GM รวมกัน) ต่อการย่อ 1 ครั้ง ~10 รอบสนทนา
+const SUMMARIZE_KEEP_RECENT = 20;  // เก็บข้อความล่าสุดไว้ไม่แตะต้อง อย่างน้อยเท่านี้ ก่อนจะเริ่มย่อของเก่าถัดจากนั้น
 
 const CLASS_PRESETS = [
     {
@@ -45,6 +48,9 @@ let conversationHistory = [];
 let pendingRoll = null; // { required, die, reason, rolled? } - ตั้งค่าเมื่อ AI ขอให้ทอยเต๋า (rolled = แต้มที่ทอยแล้วแต่ยังส่งไม่สำเร็จ)
 let enemies = []; // [{ name, hp, maxHp }] ศัตรูที่อยู่ในฉากตอนนี้
 let failedRequest = null; // { text, opts } - คำขอปกติ/ฉากเปิดเรื่องที่ส่งไม่สำเร็จ ไว้ให้กดลองใหม่
+let summaryText = "";     // สรุปความจำระยะยาวสะสม (รวมของเก่ากับใหม่แล้ว) ส่งแนบไปกับทุก request ของ /api/chat
+let summarizedCount = 0;  // จำนวนข้อความเก่าสุดใน conversationHistory ที่ถูกย่อรวมเข้า summaryText ไปแล้ว
+let isSummarizing = false; // กันยิง /api/summarize ซ้อนกันหลายครั้งพร้อมกัน
 
 const chatLog = document.getElementById("chat-log");
 const inputField = document.getElementById("action-input");
@@ -56,6 +62,9 @@ window.onload = () => {
     if (character) {
         conversationHistory = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
         enemies = loadEnemies();
+        const s = loadSummaryState();
+        summaryText = s.text;
+        summarizedCount = s.count;
         showScreen("game");
         renderCharacterSheet();
         setInputEnabled(false);
@@ -186,6 +195,9 @@ function initGame() {
     savePendingRoll();
     enemies = [];
     saveEnemies();
+    summaryText = "";
+    summarizedCount = 0;
+    saveSummaryState();
     saveCharacter();
     saveHistory();
     chatLog.innerHTML = "";
@@ -208,10 +220,14 @@ function resetGame() {
     localStorage.removeItem(HISTORY_KEY);
     localStorage.removeItem(PENDING_ROLL_KEY);
     localStorage.removeItem(ENEMY_KEY);
+    localStorage.removeItem(SUMMARY_KEY);
     character = null;
     conversationHistory = [];
     pendingRoll = null;
     enemies = [];
+    summaryText = "";
+    summarizedCount = 0;
+    isSummarizing = false;
     failedRequest = null;
     chatLog.innerHTML = "";
     showScreen("select");
@@ -232,6 +248,17 @@ function renderCharacterSheet() {
     document.getElementById("hp-bar-fill").style.width = `${pct}%`;
 
     document.getElementById("gold-text").textContent = character.gold;
+
+    // เผื่อมีของเก่าที่หลุดเป็น object ค้างอยู่ใน save เดิม (ก่อนแก้บั๊กนี้) ให้กู้เป็นข้อความแทนที่จะโชว์ [object Object]
+    let inventoryFixed = false;
+    character.inventory = character.inventory.map(item => {
+        if (typeof item === "string") return item;
+        const recovered = extractItemName(item);
+        if (recovered) { inventoryFixed = true; return recovered; }
+        inventoryFixed = true;
+        return null;
+    }).filter(Boolean);
+    if (inventoryFixed) saveCharacter();
 
     const invEl = document.getElementById("inventory-list");
     invEl.innerHTML = character.inventory.length
@@ -257,6 +284,52 @@ function loadEnemies() {
     } catch { return []; }
 }
 function loadPendingRoll() { const raw = localStorage.getItem(PENDING_ROLL_KEY); return raw ? JSON.parse(raw) : null; }
+
+function loadSummaryState() {
+    try {
+        const raw = localStorage.getItem(SUMMARY_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        if (parsed && typeof parsed.text === "string" && Number.isInteger(parsed.count)) return parsed;
+    } catch { /* ข้อมูลเสีย ใช้ค่าเริ่มต้นแทน */ }
+    return { text: "", count: 0 };
+}
+function saveSummaryState() {
+    localStorage.setItem(SUMMARY_KEY, JSON.stringify({ text: summaryText, count: summarizedCount }));
+}
+
+// เรียกเบื้องหลังหลัง GM ตอบสำเร็จทุกครั้ง (ไม่บล็อก UI) เพื่อย่อ history ส่วนเก่าที่ยังไม่เคยถูกย่อ
+// ให้กลายเป็นความทรงจำระยะยาว (summaryText) เก็บไว้แนบไปกับทุก request แทน history ดิบที่จะถูกตัดทิ้งฝั่งเซิร์ฟเวอร์
+// ทำงานแบบ fire-and-forget: ถ้าพลาด/ล้มเหลว จะลองใหม่อัตโนมัติในรอบสนทนาถัดไป (ไม่ขยับ summarizedCount ถ้ายังไม่สำเร็จ)
+async function maybeSummarizeOldHistory() {
+    if (isSummarizing) return;
+    const unsummarized = conversationHistory.length - summarizedCount;
+    if (unsummarized < SUMMARIZE_CHUNK_SIZE + SUMMARIZE_KEEP_RECENT) return;
+
+    const chunk = conversationHistory.slice(summarizedCount, summarizedCount + SUMMARIZE_CHUNK_SIZE);
+    isSummarizing = true;
+    try {
+        const response = await fetch('/api/summarize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chunk, previous_summary: summaryText, character })
+        });
+        let data = null;
+        try { data = await response.json(); } catch { data = null; }
+
+        if (data && typeof data.summary === "string" && !data._failed) {
+            summaryText = data.summary;
+            summarizedCount += chunk.length;
+            saveSummaryState();
+            console.log(`[summarize] ย่อ history สำเร็จ (${chunk.length} ข้อความ) รวมแล้ว summarizedCount=${summarizedCount}`);
+        } else {
+            console.warn("[summarize] ย่อ history ไม่สำเร็จ จะลองใหม่ในรอบสนทนาถัดไป", data && data._reason);
+        }
+    } catch (err) {
+        console.warn("[summarize] เรียก /api/summarize ล้มเหลว จะลองใหม่ในรอบสนทนาถัดไป", err.message);
+    } finally {
+        isSummarizing = false;
+    }
+}
 
 // ========================= แชท / เกมเพลย์ =========================
 function addMessage(type, text) {
@@ -386,13 +459,28 @@ function formatInvItem(base, qty, forceQty) {
 }
 
 // รับได้ทั้ง {name, quantity} และข้อความเก่า
+// กันไว้เผื่อ name หลุดมาเป็น object แทนที่จะเป็น string ตรงๆ (จะได้ไม่กลายเป็น "[object Object]" ในกระเป๋า)
+function extractItemName(raw) {
+    if (typeof raw === "string") return raw;
+    if (raw && typeof raw === "object") {
+        const candidate = raw.name || raw.th || raw.en || raw.text || raw.value;
+        if (typeof candidate === "string") return candidate;
+    }
+    return "";
+}
+
 function toItemEntry(x) {
     if (typeof x === "string") {
         const p = parseInvItem(x);
         return p.base ? { name: p.base, quantity: p.qty } : null;
     }
-    if (x && typeof x.name === "string") {
-        const p = parseInvItem(x.name);
+    if (x && typeof x === "object") {
+        const rawName = extractItemName(x.name);
+        if (!rawName.trim()) {
+            console.warn("[toItemEntry] ได้รับ item ที่ name กู้คืนเป็นข้อความไม่ได้:", x);
+            return null;
+        }
+        const p = parseInvItem(rawName);
         const q = Math.trunc(Number(x.quantity));
         return p.base ? { name: p.base, quantity: q >= 1 ? Math.min(q, 999) : p.qty } : null;
     }
@@ -600,7 +688,7 @@ async function callServer(playerText, opts = {}) {
         const response = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ history: conversationHistory, character, enemies })
+            body: JSON.stringify({ history: conversationHistory, character, enemies, summary: summaryText })
         });
 
         try { data = await response.json(); } catch { data = null; } // เช่น Vercel timeout ตอบเป็น HTML/ข้อความ
@@ -634,6 +722,7 @@ async function callServer(playerText, opts = {}) {
     addMessage("gm", data.narrative);
     conversationHistory.push({ role: "model", parts: [{ text: data.narrative }] });
     saveHistory();
+    maybeSummarizeOldHistory(); // ทำงานเบื้องหลัง ไม่ await เพื่อไม่ให้หน่วง UI
 
     applyStateChanges(data);
 
