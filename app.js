@@ -4,6 +4,8 @@ const HISTORY_KEY = "solo_mmo_history_v2";
 const POINT_BUY_POOL = 20;
 const STAT_MIN = 8;
 const STAT_MAX = 18;
+const KICKOFF_TEXT = "[เริ่มเกม]";
+const PENDING_ROLL_KEY = "solo_mmo_pending_roll_v1";
 
 const CLASS_PRESETS = [
     {
@@ -39,6 +41,7 @@ const CLASS_PRESETS = [
 // ========================= State =========================
 let character = null;
 let conversationHistory = [];
+let pendingRoll = null; // { required, die, reason } - ตั้งค่าเมื่อ AI ขอให้ทอยเต๋า
 
 const chatLog = document.getElementById("chat-log");
 const inputField = document.getElementById("action-input");
@@ -51,15 +54,23 @@ window.onload = () => {
         conversationHistory = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
         showScreen("game");
         renderCharacterSheet();
+        setInputEnabled(false);
+        setDiceEnabled(false);
         if (conversationHistory.length === 0) {
-            addMessage("system", "[System]: โลกพร้อมแล้ว พิมพ์การกระทำแรกของคุณเพื่อเริ่มเกม...");
+            addMessage("system", "[System]: กำลังเชื่อมต่อเข้าสู่โลก...");
+            startAdventure();
         } else {
             addMessage("system", "[System]: กำลังโหลดเนื้อเรื่องเดิมต่อ...");
             conversationHistory.forEach(entry => {
                 const text = entry.parts?.[0]?.text || "";
-                if (entry.role === "user") addMessage("player", `> ${text}`);
-                else addMessage("gm", safeNarrative(text));
+                if (entry.role === "user" && text !== KICKOFF_TEXT) addMessage("player", `> ${text}`);
+                else if (entry.role === "model") addMessage("gm", safeNarrative(text));
             });
+            pendingRoll = loadPendingRoll();
+            if (pendingRoll && pendingRoll.required) {
+                addMessage("system", `[System]: 🎲 GM ขอให้คุณทอยเต๋าเพื่อ: ${pendingRoll.reason || "ตัดสินผลการกระทำ"}`);
+            }
+            restoreControls();
         }
         simulateMMO();
     } else {
@@ -165,21 +176,33 @@ function calcMaxHp(con) {
 // ========================= เริ่มเกม =========================
 function initGame() {
     conversationHistory = [];
+    pendingRoll = null;
+    savePendingRoll();
     saveCharacter();
     saveHistory();
     chatLog.innerHTML = "";
     showScreen("game");
     renderCharacterSheet();
-    addMessage("system", `[System]: ยินดีต้อนรับ ${character.name} นักผจญภัย${character.className} สู่โลกกว้าง พิมพ์การกระทำแรกของคุณเพื่อเริ่มเกม...`);
+    setInputEnabled(false);
+    setDiceEnabled(false);
+    addMessage("system", `[System]: กำลังนำ ${character.name} เข้าสู่โลกกว้าง...`);
+    startAdventure();
     simulateMMO();
+}
+
+// ยิง request แรกให้ AI แต่งฉากเปิดเรื่องเอง แทนข้อความ system ตายตัว
+async function startAdventure() {
+    await callServer(KICKOFF_TEXT, { hidePlayerBubble: true });
 }
 
 function resetGame() {
     if (!confirm("ต้องการเริ่มเกมใหม่และล้างตัวละคร/เนื้อเรื่องเดิมหรือไม่?")) return;
     localStorage.removeItem(CHAR_KEY);
     localStorage.removeItem(HISTORY_KEY);
+    localStorage.removeItem(PENDING_ROLL_KEY);
     character = null;
     conversationHistory = [];
+    pendingRoll = null;
     chatLog.innerHTML = "";
     showScreen("select");
 }
@@ -209,6 +232,11 @@ function renderCharacterSheet() {
 function saveCharacter() { localStorage.setItem(CHAR_KEY, JSON.stringify(character)); }
 function loadCharacter() { const raw = localStorage.getItem(CHAR_KEY); return raw ? JSON.parse(raw) : null; }
 function saveHistory() { localStorage.setItem(HISTORY_KEY, JSON.stringify(conversationHistory)); }
+function savePendingRoll() {
+    if (pendingRoll) localStorage.setItem(PENDING_ROLL_KEY, JSON.stringify(pendingRoll));
+    else localStorage.removeItem(PENDING_ROLL_KEY);
+}
+function loadPendingRoll() { const raw = localStorage.getItem(PENDING_ROLL_KEY); return raw ? JSON.parse(raw) : null; }
 
 // ========================= แชท / เกมเพลย์ =========================
 function addMessage(type, text) {
@@ -231,10 +259,14 @@ function safeNarrative(text) {
 }
 
 function rollD20() {
-    if (character.hp <= 0) return;
+    if (character.hp <= 0 || !pendingRoll || !pendingRoll.required) return;
     let roll = Math.floor(Math.random() * 20) + 1;
-    addMessage("system", `[Dice Roll]: คุณทอย D20 ได้แต้ม <b>${roll}</b>!`);
-    callServer(`ฉันทอยลูกเต๋า D20 ได้แต้ม ${roll} ใช้ผลลัพธ์นี้ตัดสินการกระทำล่าสุดของฉัน`);
+    addMessage("system", `[Dice Roll]: คุณทอย ${pendingRoll.die || "d20"} ได้แต้ม <b>${roll}</b>!`);
+    const reason = pendingRoll.reason || "การกระทำล่าสุด";
+    const rollText = `ฉันทอย ${pendingRoll.die || "d20"} ได้แต้ม ${roll} สำหรับ: ${reason}`;
+    pendingRoll = null;
+    savePendingRoll();
+    callServer(rollText);
 }
 
 function handleEnter(event) {
@@ -242,7 +274,7 @@ function handleEnter(event) {
 }
 
 function sendAction() {
-    if (character.hp <= 0) return;
+    if (character.hp <= 0 || (pendingRoll && pendingRoll.required)) return;
     const text = inputField.value.trim();
     if (!text) return;
     addMessage("player", `> ${text}`);
@@ -252,11 +284,17 @@ function sendAction() {
 
 function setInputEnabled(enabled) {
     inputField.disabled = !enabled;
-    document.querySelector(".dice-btn").disabled = !enabled;
 }
 
-async function callServer(playerText) {
+function setDiceEnabled(enabled, label) {
+    const btn = document.querySelector(".dice-btn");
+    btn.disabled = !enabled;
+    btn.textContent = enabled ? `🎲 ทอยเต๋า D20${label ? ` — ${label}` : ""}` : "🎲 รอ GM เรียกให้ทอยเต๋า...";
+}
+
+async function callServer(playerText, opts = {}) {
     setInputEnabled(false);
+    setDiceEnabled(false);
     const loadingMsg = addMessage("system", "[System]: GM กำลังประมวลผล...");
 
     conversationHistory.push({ role: "user", parts: [{ text: playerText }] });
@@ -273,7 +311,7 @@ async function callServer(playerText) {
         if (response.status === 429) {
             addMessage("system", "[System]: เซิร์ฟเวอร์ทำงานหนักเกินไป (Rate Limit) กรุณารอสักครู่แล้วลองใหม่");
             conversationHistory.pop();
-            setInputEnabled(true);
+            restoreControls();
             return;
         }
 
@@ -282,7 +320,7 @@ async function callServer(playerText) {
         if (!data.narrative) {
             addMessage("system", `[Error]: เซิร์ฟเวอร์ตอบกลับผิดพลาด - ${data.error || "ไม่ทราบสาเหตุ"}`);
             conversationHistory.pop();
-            setInputEnabled(true);
+            restoreControls();
             return;
         }
 
@@ -291,12 +329,36 @@ async function callServer(playerText) {
         saveHistory();
 
         applyStateChanges(data);
-        setInputEnabled(character.hp > 0);
+
+        // ตั้งค่า pendingRoll ตามที่ AI ขอมา
+        if (data.roll_request && data.roll_request.required) {
+            pendingRoll = data.roll_request;
+            addMessage("system", `[System]: 🎲 GM ขอให้คุณทอยเต๋าเพื่อ: ${pendingRoll.reason || "ตัดสินผลการกระทำ"}`);
+        } else {
+            pendingRoll = null;
+        }
+        savePendingRoll();
+        restoreControls();
     } catch (error) {
         loadingMsg.remove();
         addMessage("system", `[Error]: การเชื่อมต่อล้มเหลว - ${error.message}`);
         conversationHistory.pop();
+        restoreControls();
+    }
+}
+
+function restoreControls() {
+    if (character.hp <= 0) {
+        setInputEnabled(false);
+        setDiceEnabled(false);
+        return;
+    }
+    if (pendingRoll && pendingRoll.required) {
+        setInputEnabled(false);
+        setDiceEnabled(true, pendingRoll.reason);
+    } else {
         setInputEnabled(true);
+        setDiceEnabled(false);
     }
 }
 
