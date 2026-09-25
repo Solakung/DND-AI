@@ -29,7 +29,7 @@
             <label class="field-label">ประวัติ/บุคลิกตัวละคร (ให้ AI ใช้แต่งเนื้อเรื่อง)</label>
             <textarea id="custom-backstory" class="text-area" placeholder="เช่น อดีตทหารรับจ้างที่หนีออกจากสมรภูมิ ตามหาน้องสาวที่หายตัวไป..."></textarea>
 
-            <label class="field-label">แจกแต้มสถานะ (เหลือ <span id="points-left">20</span> แต้ม)</label>
+            <label class="field-label">แจกแต้มสถานะ (เหลือ <span id="points-left">30</span> แต้ม)</label>
             <div class="point-buy">
                 <div class="point-row">
                     <span>STR (พลัง)</span>
@@ -54,6 +54,18 @@
                     <button onclick="adjustStat('con',-1)">-</button>
                     <span id="val-con">8</span>
                     <button onclick="adjustStat('con',1)">+</button>
+                </div>
+                <div class="point-row">
+                    <span>WIS (ไหวพริบ/สัญชาตญาณ)</span>
+                    <button onclick="adjustStat('wis',-1)">-</button>
+                    <span id="val-wis">8</span>
+                    <button onclick="adjustStat('wis',1)">+</button>
+                </div>
+                <div class="point-row">
+                    <span>CHA (เสน่ห์/โน้มน้าว)</span>
+                    <button onclick="adjustStat('cha',-1)">-</button>
+                    <span id="val-cha">8</span>
+                    <button onclick="adjustStat('cha',1)">+</button>
                 </div>
             </div>
 
@@ -80,19 +92,36 @@
                     <div class="hp-bar-bg"><div id="hp-bar-fill" class="hp-bar-fill"></div></div>
                 </div>
 
-                <div class="gold-wrap">💰 <span id="gold-text">0</span> Gold</div>
+                <div class="hp-wrap">
+                    <div class="hp-label">
+                        <span>เลเวล <span id="level-text">1</span> · Proficiency <span id="prof-text">+2</span></span>
+                        <span id="xp-text">0 / 100 XP</span>
+                    </div>
+                    <div class="hp-bar-bg"><div id="xp-bar-fill" class="hp-bar-fill xp-bar-fill"></div></div>
+                </div>
+
+                <div class="gold-wrap">💰 <span id="gold-text">0</span> Gold &nbsp;·&nbsp; 🛡️ AC <span id="ac-text">10</span></div>
+
+                <!-- แสดงเฉพาะตอนตัวละคร HP เหลือ 0 และกำลังทอย Death Saving Throw -->
+                <div id="death-save-panel" style="display:none;"></div>
 
                 <div class="stats">
                     <div class="stat"><span>STR (พลัง)</span><span id="stat-str">16</span></div>
                     <div class="stat"><span>DEX (ว่องไว)</span><span id="stat-dex">14</span></div>
                     <div class="stat"><span>INT (ฉลาด)</span><span id="stat-int">10</span></div>
                     <div class="stat"><span>CON (อดทน)</span><span id="stat-con">15</span></div>
+                    <div class="stat"><span>WIS (ไหวพริบ)</span><span id="stat-wis">10</span></div>
+                    <div class="stat"><span>CHA (เสน่ห์)</span><span id="stat-cha">10</span></div>
                 </div>
 
                 <h3 style="margin-top: 20px;">กระเป๋า (Inventory)</h3>
                 <div class="inventory" id="inventory-list"></div>
 
                 <button onclick="rollD20()" class="dice-btn" disabled>🎲 รอ GM เรียกให้ทอยเต๋า...</button>
+                <div class="button-row" style="margin-top:10px;">
+                    <button onclick="requestRest('short')" class="back-btn" id="short-rest-btn" style="flex:1;">🏕️ พักสั้น</button>
+                    <button onclick="requestRest('long')" class="back-btn" id="long-rest-btn" style="flex:1;">🌙 พักยาว</button>
+                </div>
                 <button onclick="resetGame()" class="reset-btn">🔄 เริ่มเกมใหม่</button>
             </aside>
 
